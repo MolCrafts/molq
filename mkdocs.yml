@@ -1,0 +1,72 @@
+site_name: Molq
+site_description: Modern job queue for local and cluster runners
+site_author: Roy Kid
+repo_url: https://github.com/molcrafts/molq
+
+# Use Material theme
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.top
+    - navigation.instant
+    - navigation.tracking
+    - search.highlight
+    - search.share
+    - search.suggest
+    - content.code.copy
+    - content.tabs.link
+  palette:
+    - scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: false
+            members_order: source
+            group_by_category: true
+
+nav:
+  - Home: index.md
+  - Tutorial:
+    - Getting Started: tutorial/getting-started.md
+    - Core Concepts: tutorial/core-concepts.md
+    - Advanced Usage: tutorial/advanced-usage.md
+  - Recipes:
+    - Machine Learning: recipes/machine-learning.md
+    - Scientific Computing: recipes/scientific-computing.md
+  - API Reference:
+    - Overview: api/index.md
+    - Submit Decorators: api/submit.md
+  - Specification:
+    - Job Configuration: spec/job-config.md
