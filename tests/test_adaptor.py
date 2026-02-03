@@ -6,6 +6,7 @@ import pytest
 from pytest_mock import MockerFixture
 
 from molq.submitor import SlurmSubmitor
+from molq.resources import JobSpec, ExecutionSpec, ResourceSpec
 
 
 class MockedSlurm:
@@ -28,18 +29,16 @@ class MockedSlurm:
     def sbatch(cmd):
         mock = MagicMock()
         mock.returncode = 0
-        if cmd[-1] == "--test-only":
-            mock.stderr = b"sbatch: Job 3676091 to start at 2024-04-26T20:02:12 using 256 processors on nodes nid001000 in partition main"
-
+        if "--test-only" in cmd:
+            mock.stderr = "sbatch: Job 3676091 to start at 2024-04-26T20:02:12 using 256 processors on nodes nid001000 in partition main"
         else:
-            mock.stdout = b"3676091"
-
+            mock.stdout = "3676091"
         return mock
 
     @staticmethod
     def squeue(cmd):
         mock = MagicMock()
-        mock.stdout = b"JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)\n3676091      main     test     user  R       0:01      1 nid001000"
+        mock.stdout = "3676091 R test main user RUNNING 0:01 1 nid001000 2024-04-26T20:02:12"
         return mock
 
     @staticmethod
@@ -58,40 +57,57 @@ class TestSlurmAdapter:
             script_path.unlink()
 
     def test_gen_script(self):
+        """Test script generation with new architecture."""
         submitor = SlurmSubmitor("test_submitor")
-        config = {"--job-name": "test", "--ntasks": 1}
-        path = submitor.gen_script(script_path="run_slurm.sh", cmd=["ls"], **config)
+        
+        # Create a JobSpec with the required parameters
+        spec = JobSpec(
+            execution=ExecutionSpec(cmd=["ls"], job_name="test"),
+            resources=ResourceSpec(cpu_count=1)
+        )
+        
+        # Use the script generator directly
+        from molq.scripts import SlurmScriptGenerator
+        generator = SlurmScriptGenerator()
+        path = generator.generate(spec, Path("run_slurm.sh"))
+        
         with open(path, "r") as f:
-            lines = f.readlines()
-
-        assert lines[0] == "#!/bin/bash\n"
-        assert lines[1] == "#SBATCH --job-name=test\n"
-        assert lines[2] == "#SBATCH --ntasks=1\n"
-        assert lines[3] == "\n"
-        assert lines[4] == "ls"
+            content = f.read()
+        
+        assert "#!/bin/bash" in content
+        assert "#SBATCH --job-name=test" in content
+        assert "#SBATCH --ntasks=1" in content
+        assert "ls" in content
 
     def test_submit(self, mocker: MockerFixture):
+        """Test job submission with new architecture."""
         mocker.patch.object(subprocess, "run", MockedSlurm.run)
 
         submitor = SlurmSubmitor("test_submitor")
-        job_id = submitor.submit({"cmd": ["ls"], "job_name": "test", "n_cores": 1})
+        # Use the new format - validate_config will handle legacy format
+        # Set block=False to avoid waiting for job completion in tests
+        job_id = submitor.submit({"cmd": ["ls"], "job_name": "test", "cpu_count": 1, "block": False})
         assert isinstance(job_id, int)
 
     def test_submit_test_only(self, mocker: MockerFixture):
+        """Test job submission with test_only flag."""
         mocker.patch.object(subprocess, "run", MockedSlurm.run)
 
         submitor = SlurmSubmitor("test_submitor")
         job_id = submitor.submit(
-            {"cmd": ["ls"], "job_name": "test", "n_cores": 1, "test_only": True}
+            {"cmd": ["ls"], "job_name": "test", "cpu_count": 1, "test_only": True, "block": False}
         )
         assert isinstance(job_id, int)
 
     def test_monitoring(self, mocker: MockerFixture):
+        """Test job monitoring."""
         mocker.patch.object(subprocess, "run", MockedSlurm.run)
 
         submitor = SlurmSubmitor("test_submitor")
         job_id = submitor.submit(
-            {"cmd": ["sleep 1"], "job_name": "test1", "cpu_count": 1, "is_block": False}
-        )  # not block inplace
-        submitor.monitor_all(interval=1)  # block here
-        assert isinstance(job_id, int)
+            {"cmd": ["sleep 1"], "job_name": "test1", "cpu_count": 1, "block": False}
+        )
+        
+        # Query the job status
+        statuses = submitor.query(job_id)
+        assert job_id in statuses

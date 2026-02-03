@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from molq import submit
-from molq.resources import BaseResourceSpec, ComputeResourceSpec
+from molq.resources import ExecutionSpec, JobSpec, ResourceSpec
 
 
 class TestCleanupTempFiles:
@@ -17,13 +17,15 @@ class TestCleanupTempFiles:
 
         @local_submitter
         def job_default_cleanup():
-            spec = BaseResourceSpec(
-                cmd=["echo", "default cleanup test"],
-                job_name="default_cleanup",
-                block=True,  # cleanup_temp_files defaults to True
+            spec = JobSpec(
+                execution=ExecutionSpec(
+                    cmd=["echo", "default cleanup test"],
+                    job_name="default_cleanup",
+                    block=True,  # cleanup_temp_files defaults to True
+                )
             )
             config = spec.model_dump()
-            config["script_name"] = "test_default_cleanup.sh"
+            config["execution"]["extra"] = {"script_name": "test_default_cleanup.sh"}
             job_id = yield config
             return job_id
 
@@ -41,14 +43,16 @@ class TestCleanupTempFiles:
 
         @local_submitter
         def job_explicit_cleanup():
-            spec = BaseResourceSpec(
-                cmd=["echo", "explicit cleanup test"],
-                job_name="explicit_cleanup",
-                cleanup_temp_files=True,
-                block=True,
+            spec = JobSpec(
+                execution=ExecutionSpec(
+                    cmd=["echo", "explicit cleanup test"],
+                    job_name="explicit_cleanup",
+                    cleanup_temp_files=True,
+                    block=True,
+                )
             )
             config = spec.model_dump()
-            config["script_name"] = "test_explicit_cleanup.sh"
+            config["execution"]["extra"] = {"script_name": "test_explicit_cleanup.sh"}
             job_id = yield config
             return job_id
 
@@ -66,14 +70,16 @@ class TestCleanupTempFiles:
 
         @local_submitter
         def job_no_cleanup():
-            spec = BaseResourceSpec(
-                cmd=["echo", "no cleanup test"],
-                job_name="no_cleanup",
-                cleanup_temp_files=False,
-                block=True,
+            spec = JobSpec(
+                execution=ExecutionSpec(
+                    cmd=["echo", "no cleanup test"],
+                    job_name="no_cleanup",
+                    cleanup_temp_files=False,
+                    block=True,
+                )
             )
             config = spec.model_dump()
-            config["script_name"] = "test_no_cleanup.sh"
+            config["execution"]["extra"] = {"script_name": "test_no_cleanup.sh"}
             job_id = yield config
             return job_id
 
@@ -85,33 +91,6 @@ class TestCleanupTempFiles:
 
         # Clean up manually
         script_path.unlink()
-
-    def test_compute_resource_spec_cleanup(self):
-        """Test cleanup with ComputeResourceSpec."""
-        local_submitter = submit("test_compute_cleanup", "local")
-
-        @local_submitter
-        def compute_job():
-            spec = ComputeResourceSpec(
-                cmd=["echo", "compute cleanup test"],
-                job_name="compute_cleanup",
-                cpu_count=2,
-                memory="1GB",
-                cleanup_temp_files=True,
-                block=True,
-            )
-            config = spec.model_dump()
-            config["script_name"] = "test_compute_cleanup.sh"
-            job_id = yield config
-            return job_id
-
-        job_id = compute_job()
-        assert job_id is not None
-
-        script_path = Path("test_compute_cleanup.sh")
-        assert (
-            not script_path.exists()
-        ), "ComputeResourceSpec should also support cleanup"
 
     def test_backwards_compatibility_dict_config(self):
         """Test that cleanup works with traditional dict config."""
@@ -142,17 +121,17 @@ class TestCleanupTempFiles:
 
     def test_resource_spec_model_dump(self):
         """Test that cleanup_temp_files is properly included in model_dump."""
-        spec = BaseResourceSpec(
-            cmd=["echo", "test"], job_name="test", cleanup_temp_files=False
+        spec = JobSpec(
+            execution=ExecutionSpec(cmd=["echo", "test"], job_name="test", cleanup_temp_files=False)
         )
 
         config = spec.model_dump()
-        assert "cleanup_temp_files" in config
-        assert config["cleanup_temp_files"] is False
+        assert "execution" in config
+        assert config["execution"]["cleanup_temp_files"] is False
 
         # Test default value
-        spec_default = BaseResourceSpec(cmd=["echo", "test"], job_name="test")
+        spec_default = JobSpec(execution=ExecutionSpec(cmd=["echo", "test"], job_name="test"))
 
         config_default = spec_default.model_dump()
-        assert "cleanup_temp_files" in config_default
-        assert config_default["cleanup_temp_files"] is True
+        assert "execution" in config_default
+        assert config_default["execution"]["cleanup_temp_files"] is True

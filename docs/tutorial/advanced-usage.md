@@ -57,10 +57,11 @@ import random
 def retry_job(max_attempts: int = 3):
     for attempt in range(max_attempts):
         try:
-            return yield {
+            job_id = yield {
                 'cmd': ['python', 'flaky_service.py'],
                 'job_name': f'retry_attempt_{attempt + 1}'
             }
+            return job_id
         except Exception as e:
             if attempt == max_attempts - 1:
                 raise
@@ -357,13 +358,16 @@ def right_sized_job():
 @cluster
 def robust_pipeline():
     try:
-        return yield {'cmd': ['python', 'preferred_method.py']}
+        job_id = yield {'cmd': ['python', 'preferred_method.py']}
+        return job_id
     except ResourceError:
         # Fallback to less resource-intensive method
-        return yield {'cmd': ['python', 'lightweight_method.py']}
+        job_id = yield {'cmd': ['python', 'lightweight_method.py']}
+        return job_id
     except Exception:
         # Last resort: simple processing
-        return yield {'cmd': ['python', 'basic_method.py']}
+        job_id = yield {'cmd': ['python', 'basic_method.py']}
+        return job_id
 ```
 
 These patterns help you build production-ready workflows that are resilient, efficient, and maintainable.

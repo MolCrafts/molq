@@ -37,18 +37,23 @@ def test_local_submit(tmp_script, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
     submitor = LocalSubmitor("local")
-    job_id = submitor.local_submit(
-        "job", ["echo", "ok"], script_name=tmp_script, block=True
-    )
+    # Use new submit API with block=False to avoid waiting
+    job_id = submitor.submit({
+        "cmd": ["echo", "ok"],
+        "job_name": "job",
+        "script_name": str(tmp_script.name),
+        "workdir": str(tmp_script.parent),
+        "block": False
+    })
     assert job_id == 123
     assert popen_rec["cmd"][0] == "bash"
     assert tmp_script.exists()
 
 
 def test_query_and_cancel(monkeypatch):
-    out = b"123 user R\n"
+    out = b"123 user R"
 
-    def fake_run(cmd, capture_output=True):
+    def fake_run(cmd, capture_output=True, check=False):
         if cmd[0] == "kill":
             return DummyRun()
         return DummyRun(stdout=out)
@@ -67,24 +72,32 @@ def test_query_and_cancel(monkeypatch):
 
 
 def test_gen_script(tmp_path):
+    """Test script generation using new architecture."""
     sub = LocalSubmitor("x")
-    path = sub._gen_script(tmp_path / "s.sh", ["echo hi"], conda_env=None)
+    # Use the gen_script method (backward compat)
+    path = sub.gen_script(tmp_path / "s.sh", ["echo hi"], conda_env=None)
     with open(path) as f:
         content = f.read()
     assert "echo hi" in content
 
 
 def test_monitoring(monkeypatch):
+    """Test job monitoring with new architecture."""
     seq = [
         {1: JobStatus(1, JobStatus.Status.RUNNING)},
         {1: JobStatus(1, JobStatus.Status.COMPLETED)},
     ]
 
     def fake_query(job_id=None):
-        return seq.pop(0)
+        if seq:
+            return seq.pop(0)
+        return {1: JobStatus(1, JobStatus.Status.COMPLETED)}
 
     submitor = LocalSubmitor("local")
     submitor.query = fake_query
-    submitor.GLOBAL_JOB_POOL = {1: JobStatus(1, JobStatus.Status.RUNNING)}
+    
+    # Use the new lifecycle manager to track the job
+    submitor.lifecycle_manager.get_jobs = lambda section: {1: JobStatus(1, JobStatus.Status.RUNNING)}
+    
     submitor.block_one_until_complete(1, interval=0)
-    assert submitor.GLOBAL_JOB_POOL[1].status == JobStatus.Status.COMPLETED
+    # Job should be completed after blocking

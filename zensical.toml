@@ -1,0 +1,84 @@
+[project]
+site_name = "Molq"
+site_description = "Modern job queue for local and cluster runners"
+site_author = "Roy Kid"
+repo_url = "https://github.com/molcrafts/molq"
+
+[project.theme]
+name = "modern"
+features = [
+    "navigation.tabs",
+    "navigation.top",
+    "navigation.instant",
+    "navigation.tracking",
+    "search.highlight",
+    "content.code.copy",
+    "content.tabs.link",
+    "navigation.footer",
+    "navigation.indexes",
+    "navigation.path"
+]
+
+[[project.theme.palette]]
+scheme = "default"
+primary = "blue"
+accent = "blue"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+primary = "blue"
+accent = "blue"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
+
+[markdown]
+extensions = [
+    "admonition",
+    "attr_list",
+    "md_in_html"
+]
+
+[markdown.toc]
+permalink = true
+
+[markdown.highlight]
+anchor_linenums = true
+
+[markdown.superfences]
+
+[markdown.tabbed]
+alternate_style = true
+
+[markdown.emoji]
+index = "twemoji"
+generator = "to_svg"
+
+[plugins]
+search = {}
+
+[plugins.mkdocstrings]
+# Use the common structure for plugins if possible, or follow zensical specific docs.
+# For now, I'll use the mkdocs-like structure as zensical aims for compatibility.
+handlers.python.options = { docstring_style = "google", show_source = false, members_order = "source", group_by_category = true }
+
+[nav]
+Home = "index.md"
+
+[nav.Tutorial]
+"Getting Started" = "tutorial/getting-started.md"
+"Core Concepts" = "tutorial/core-concepts.md"
+"Advanced Usage" = "tutorial/advanced-usage.md"
+
+[nav.Recipes]
+"Machine Learning" = "recipes/machine-learning.md"
+"Scientific Computing" = "recipes/scientific-computing.md"
+
+[nav."API Reference"]
+Overview = "api/index.md"
+"Submit Decorators" = "api/submit.md"
+"CLI Reference" = "api/cli.md"
+
+[nav.Specification]
+"Job Configuration" = "spec/job-config.md"

@@ -40,6 +40,7 @@ Changelog = "https://github.com/molcrafts/molq/blob/main/CHANGELOG.md"
 [project.scripts]
 molq = "molq.cli.main:cli"
 
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
@@ -47,18 +48,14 @@ dev = [
     "pytest-cov",
     "coverage[toml]",
     "build",
-    "mkdocs",
-    "mkdocs-material",
-    "mkdocstrings[python]",
+
     "black",
     "isort",
     "flake8",
     "mypy",
 ]
 docs = [
-    "mkdocs",
-    "mkdocs-material",
-    "mkdocstrings[python]",
+    "zensical",
 ]
 
 [tool.setuptools.packages.find]

@@ -1,154 +1,57 @@
-# Molq: Molcrafts Queue Interface
+# Molq: Modern Job Queue Interface
 
-Molq is a unified and flexible job queue system designed for both local execution and cluster computing environments. It provides a clean, decorator-based API that makes it easy to submit, monitor, and manage computational tasks across different execution backends.
+## What is Molq?
 
-## Key Features
+Molq is a seamless bridge between your Python code and computational resources. It allows you to define complex computational workflows—whether they are data processing pipelines, machine learning training loops, or scientific simulations—and execute them on various backends, from your local machine to high-performance SLURM clusters.
 
-- **Unified Interface**: Single API for local and cluster execution
-- **Decorator-Based**: Simple, Pythonic syntax using decorators
-- **Generator Support**: Advanced control flow with generator-based tasks
-- **Multiple Backends**: Support for local execution, SLURM clusters, and more
-- **Job Monitoring**: Built-in status tracking and error handling
-- **Resource Management**: Flexible resource allocation and cleanup
+At its core, Molq represents a job submission system that decouples **logic definition** from **execution details**. You write your workflow once in Python, and Molq handles the translation to the specific commands required by your compute environment.
 
-## Quick Start
+## Why do you need plain Python job submission?
+
+If you have ever worked with compute clusters, you are likely familiar with the friction of writing shell scripts (like `.submit` or `sbatch` files) to run your code. This traditional approach has several downsides:
+
+1.  **Context Switching**: You switch between Python for logic and Shell for execution.
+2.  **Hardcoded Resources**: Resource requirements are often buried in shell scripts, making them hard to adjust dynamically.
+3.  **Complex Dependencies**: Managing dependencies between jobs (e.g., "run job B after job A finishes") requires brittle logic in shell scripts.
+4.  **Vendor Lock-in**: Scripts written for SLURM don't work locally or on other schedulers without rewriting.
+
+Molq solves these problems by bringing job submission into your Python code. By treating jobs as Python objects and dependencies as code flow, you gain the full power of the Python language—loops, conditionals, exception handling, and shared configuration—to manage your computational infrastructure.
+
+## How to use Molq
+
+The simplest way to use Molq is through its decorator interface. You create a **Submitter** that targets your desired backend, and then decorate a generator function to define your job.
+
+Here is a simple example that defines a job to greet the world.
 
 ```python
 from molq import submit
 
-# Create a local submitter
-local = submit('my_cluster', 'local')
+# 1. Create a submitter
+# We create a 'local' submitter named 'dev'. This will run jobs on your machine.
+# In production, you might change 'local' to 'slurm'.
+local = submit('dev', 'local')
 
+# 2. Define your job
+# The decorator tells Molq that this function generates jobs.
 @local
 def hello_world(name: str):
     """A simple job that prints a greeting."""
+    
+    # 3. Yield the job specification
+    # Instead of running code directly, we 'yield' a dictionary describing the job.
+    # Molq takes this description and submits it to the backend.
     job_id = yield {
         'cmd': ['echo', f'Hello, {name}!'],
         'job_name': 'greeting',
-        'block': True
+        'block': True  # Wait for this job to finish before continuing
     }
-    return f"Job {job_id} completed"
+    
+    return f"Job {job_id} completed successfully"
 
-# Execute the job
+# 4. Execute
+# Calling the function submits the job.
 result = hello_world("World")
 print(result)
 ```
 
-## Architecture Overview
-
-Molq follows a clean architectural pattern with three main components:
-
-### 1. **Decorators** (`@submit`, `@cmdline`)
-High-level interfaces that wrap your functions to enable job submission and execution.
-
-### 2. **Submitters** (`LocalSubmitor`, `SlurmSubmitor`)
-Backend-specific implementations that handle the actual job submission and monitoring.
-
-### 3. **Base Classes** (`YieldDecorator`, `BaseSubmitor`)
-Abstract foundations that enable extensibility and consistent behavior across implementations.
-
-## Use Cases
-
-### Data Processing
-Process large datasets with parallel execution and resource management:
-
-```python
-@cluster
-def process_dataset(input_file: str, output_file: str):
-    job_id = yield {
-        'cmd': ['python', 'process.py', input_file, output_file],
-        'cpus': 8,
-        'memory': '32GB',
-        'time': '02:00:00'
-    }
-    return job_id
-```
-
-### Machine Learning
-Train models on compute clusters with proper resource allocation:
-
-```python
-@gpu_cluster
-def train_model(config_file: str):
-    job_id = yield {
-        'cmd': ['python', 'train.py', '--config', config_file],
-        'gpus': 2,
-        'memory': '64GB',
-        'time': '24:00:00'
-    }
-    return job_id
-```
-
-### Scientific Computing
-Execute complex simulations with dependency management:
-
-```python
-@hpc_cluster
-def run_simulation(parameters: dict):
-    job_id = yield {
-        'cmd': ['mpirun', '-n', '64', './simulation', '--params', str(parameters)],
-        'nodes': 4,
-        'ntasks_per_node': 16,
-        'time': '12:00:00'
-    }
-    return job_id
-```
-
-## Why Choose Molq?
-
-### Simple and Intuitive
-```python
-# Before: Complex job submission scripts
-subprocess.run(['sbatch', 'job_script.sh'])
-# Manual monitoring and error handling required
-
-# After: Clean, declarative syntax
-@cluster
-def my_job():
-    yield {'cmd': ['python', 'script.py'], 'cpus': 4}
-```
-
-### Flexible Resource Management
-```python
-# Automatically handles resource allocation
-@cluster
-def resource_intensive_job():
-    yield {
-        'cmd': ['python', 'heavy_computation.py'],
-        'cpus': 16,
-        'memory': '128GB',
-        'time': '04:00:00',
-        'partition': 'high-mem'
-    }
-```
-
-### Built-in Error Handling
-```python
-# Automatic retry and error reporting
-@cluster
-def robust_job():
-    try:
-        yield {'cmd': ['python', 'might_fail.py']}
-    except JobFailedException as e:
-        # Handle errors gracefully
-        yield {'cmd': ['python', 'cleanup.py']}
-```
-
-## Getting Started
-
-Ready to dive in? Here's how to get started:
-
-1. **[Installation & Setup](tutorial/getting-started.md)** - Get Molq installed and configured
-2. **[Core Concepts](tutorial/core-concepts.md)** - Understand the key concepts and patterns
-3. **[API Reference](api/index.md)** - Detailed documentation of all classes and methods
-4. **[Recipes](recipes/machine-learning.md)** - Real-world examples and best practices
-
-## Community and Support
-
-- **GitHub Repository**: [molcrafts/molq](https://github.com/molcrafts/molq)
-- **Issue Tracker**: Report bugs and request features
-- **Discussions**: Ask questions and share use cases
-
----
-
-*Molq makes job submission simple, reliable, and scalable. Start building better computational workflows today.*
+In this example, the `hello_world` function doesn't execute `echo` directly. Instead, it **yields** a request to run `echo`. Molq intercepts this request, runs the command (locally or on a cluster), and returns the `job_id`. This pattern allows you to compose complex workflows where Python logic orchestrates external processes naturally.

@@ -11,13 +11,14 @@ from abc import ABC, abstractmethod
 from functools import wraps
 from inspect import isgeneratorfunction, signature
 from pathlib import Path
-from typing import Any, Callable, Generator
+from collections.abc import Callable, Generator
+from typing import Any
 
 
 class YieldDecorator(ABC):
     """Base class for decorators that interact with generator-based tasks."""
 
-    def __call__(self, func: Callable):
+    def __call__(self, func: Callable) -> Callable:
         """Wrap ``func`` so that ``yield`` points can be intercepted."""
 
         @wraps(func)
@@ -44,7 +45,7 @@ class YieldDecorator(ABC):
         wrapper.__annotations__["return"] = signature(func).return_annotation
         return wrapper
 
-    def before_call(self, *args, **kwargs):
+    def before_call(self, *args, **kwargs) -> None:
         """Hook executed before the wrapped function is called."""
         ...
 

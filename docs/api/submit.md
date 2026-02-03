@@ -511,12 +511,12 @@ def resource_waste():
 
 ```python
 @cluster
-def well_named_jobs(experiment_id: str, dataset: str):
+def well_named_jobs(id: str, dataset: str):
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     yield {
         'cmd': ['python', 'preprocess.py', dataset],
-        'job_name': f'{experiment_id}_preprocess_{dataset}_{timestamp}',
+        'job_name': f'{id}_preprocess_{dataset}_{timestamp}',
         'cpus': 4
     }
 ```

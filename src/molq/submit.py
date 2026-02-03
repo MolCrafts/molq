@@ -4,6 +4,7 @@ This module exposes the :class:`submit` decorator used to register and submit
 jobs to different compute backends.
 """
 
+from typing import Any
 from .base import YieldDecorator
 from .submitor.base import BaseSubmitor
 
@@ -57,11 +58,11 @@ class submit(YieldDecorator):
         """Store reference to the submitter created in :py:meth:`__new__`."""
         self._current_submitor = submit.CLUSTERS[cluster_name]
 
-    def validate_yield(self, yield_result):
+    def validate_yield(self, yield_result: Any) -> Any:
         """Defer validation to the underlying submitter."""
         return yield_result
 
-    def after_yield(self, yield_result):
+    def after_yield(self, yield_result: Any) -> Any:
         """Submit the job using the current submitter."""
         return self._current_submitor.submit(yield_result)
 

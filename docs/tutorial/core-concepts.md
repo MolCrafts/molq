@@ -1,142 +1,88 @@
 # Core Concepts
 
-Molq has three key concepts you need to understand: **Decorators**, **Generators**, and **Submitters**.
+Molq is built on three fundamental concepts that work together to manage your workflows: **Job Specifications**, **Submitters**, and the **Decorator Interface**. Understanding these will render you capable of building complex, scalable pipelines.
 
-## 1. Decorators Transform Functions
+## 1. Job Specifications
+
+### What are they?
+A Job Specification (or "Job Spec") is a dictionary that describes *what* you want to run. It contains all the necessary details for a scheduler to execute your task, such as the command line, resource requirements, and environment variables.
+
+### Why do we need them?
+Compute environments need to know ahead of time what resources a job will consume. A scheduler like SLURM needs to know if you need 1 CPU or 100, and for how long, so it can reserve those resources. By making these explicit in a data structure (a dictionary), we decouple the *what* from the *how*.
+
+### How to use them
+In Molq, you define the spec as a standard Python dictionary.
+
+```python
+job_spec = {
+    # The command to run (Result: execution of this list)
+    'cmd': ['python', 'train_model.py', '--epochs', '100'],
+    
+    # Resources (crucial for clusters)
+    'cpus': 4,
+    'memory': '16GB',
+    'time': '04:00:00',
+    
+    # Metadata
+    'job_name': 'training_run_v1'
+}
+```
+
+## 2. Submitters
+
+### What are they?
+A Submitter is an object that knows how to talk to a specific execution backend. It takes a Job Spec and translates it into the native language of the backend (e.g., generating an `sbatch` script for SLURM or a `subprocess` call for local execution).
+
+### Why do we need them?
+Different environments have different rules. A local machine just runs a process. A cluster requires authentication, script generation, queue submission, and status polling. The Submitter abstracts complexity away, allowing your code to remain agnostic to the hardware it runs on. You can switch from local testing to cluster production simply by swapping the Submitter.
+
+### How to use them
+You initialize a submitter using the `submit` factory function.
 
 ```python
 from molq import submit
 
-# Create submitters for different backends
-local = submit('dev', 'local')
-cluster = submit('hpc', 'slurm')
+# A local submitter for testing
+# Usage: Runs jobs immediately as subprocesses
+dev_backend = submit('dev_cluster', 'local')
 
-@local                           # This decorator...
-def my_task():                   # ...transforms this function...
-    yield {'cmd': ['echo', 'hi']} # ...into a job submitter
+# A SLURM submitter for production
+# Usage: Generates .sbatch files and runs 'sbatch' command
+prod_backend = submit('prod_cluster', 'slurm')
 ```
 
-**What happens:** The decorator intercepts `yield` statements and submits jobs to the backend.
+## 3. The Decorator & Generator Interface
 
-## 2. Generators Control Job Flow
+### What is it?
+This is the "magic" that binds your Python functions to the Submitters. By decorating a generator function with a Submitter, you turn a regular Python function into a job definition.
 
-Use `yield` to submit jobs and get results back:
+### Why do we need it?
+We need a way to integrate job submission into Python's control flow. Simply calling a function `submit_job(...)` works, but it can be clunky for complex workflows involving dependencies.
+
+Generators allow us to **pause** execution. When you `yield` a Job Spec, your function pauses. Molq takes the spec, submits the job, and (optionally) waits for it or returns the ID immediately. This allows you to write linear, readable code that actually orchestrates asynchronous, distributed processes.
+
+### How to use it
+Apply the submitter instance as a decorator (`@backend`) to any function that `yields` job specs.
 
 ```python
-@cluster
-def pipeline():
-    # Submit first job
-    job1 = yield {'cmd': ['prepare_data.py'], 'cpus': 4}
-
-    # Submit second job that depends on first
-    job2 = yield {
-        'cmd': ['analyze.py'],
-        'dependency': job1,
-        'cpus': 16
+@prod_backend
+def complex_workflow(data_file):
+    # Step 1: Submit a preprocessing job
+    # We yield the spec, and get back a job ID
+    prep_id = yield {
+        'cmd': ['python', 'preprocess.py', data_file],
+        'cpus': 2
     }
-
-    return [job1, job2]
-```
-
-**Key point:** Each `yield` submits one job. Use dependencies to control execution order.
-
-## 3. Submitters Execute Jobs
-
-Different submitters handle different execution environments:
-
-```python
-# Local execution (for development/testing)
-local = submit('dev', 'local')
-
-# SLURM cluster (for production)
-cluster = submit('prod', 'slurm')
-
-# Same cluster name = same submitter instance
-cluster2 = submit('prod', 'slurm')  # Returns existing submitter
-```
-
-**Submitter types:**
-- `'local'` - Runs jobs on your local machine
-- `'slurm'` - Submits jobs to SLURM cluster
-
-## Job Configuration
-
-All jobs need a `cmd` (command). Everything else is optional:
-
-```python
-# Minimal job
-yield {'cmd': ['python', 'script.py']}
-
-# Job with resources (SLURM only)
-yield {
-    'cmd': ['python', 'script.py'],
-    'cpus': 16,
-    'memory': '64GB',
-    'time': '04:00:00'
-}
-```
-
-**Common options:**
-- `cmd` - Command to run (required)
-- `job_name` - Human-readable name
-- `cpus` - Number of CPU cores (SLURM)
-- `memory` - Memory requirement (SLURM)
-- `time` - Time limit in HH:MM:SS (SLURM)
-- `dependency` - Wait for other jobs first
-
-## Error Handling
-
-Handle job failures with try/catch:
-
-```python
-@cluster
-def robust_job():
-    try:
-        return yield {'cmd': ['risky_script.py']}
-    except Exception:
-        # Fallback plan
-        return yield {'cmd': ['safe_script.py']}
-```
-
-## Best Practices
-
-### Keep it Simple
-```python
-# Good: Clear and simple
-@cluster
-def train_model(data_file: str):
-    yield {
-        'cmd': ['python', 'train.py', data_file],
-        'cpus': 16,
-        'memory': '64GB',
-        'time': '08:00:00'
+    
+    # Step 2: Submit a training job that depends on Step 1
+    # We use the previous job ID as a dependency
+    train_id = yield {
+        'cmd': ['python', 'train.py'],
+        'dependency': prep_id,  # Wait for prep_id to finish
+        'gpus': 1
     }
-
-# Avoid: Over-complicated
-@cluster
-def complex_job():
-    # Too much logic in job function
-    if datetime.now().hour > 18:
-        cpus = calculate_evening_cpus()
-        memory = estimate_memory_with_overhead()
-        # ... lots of complex logic
+    
+    return train_id
 ```
 
-### Use Configuration Objects
-```python
-# Good: Reusable configurations
-CONFIGS = {
-    'small': {'cpus': 4, 'memory': '16GB', 'time': '02:00:00'},
-    'large': {'cpus': 32, 'memory': '128GB', 'time': '12:00:00'}
-}
-
-@cluster
-def scalable_job(size: str):
-    config = CONFIGS[size].copy()
-    config['cmd'] = ['python', 'process.py']
-    yield config
-```
-
-That's it! The key is understanding these three concepts: decorators transform functions, generators control flow, and submitters execute jobs.
-
-**Next:** [Advanced Usage](advanced-usage.md) for complex workflows and optimization techniques.
+In this example, the logic flows naturally from top to bottom, but under the hood, Molq is orchestrating distinct jobs on a remote cluster.
