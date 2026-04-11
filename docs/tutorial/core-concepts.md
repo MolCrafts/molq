@@ -1,88 +1,149 @@
 # Core Concepts
 
-Molq is built on three fundamental concepts that work together to manage your workflows: **Job Specifications**, **Submitters**, and the **Decorator Interface**. Understanding these will render you capable of building complex, scalable pipelines.
+Molq is built on a three-layer architecture: **Submitor** (public API), **Scheduler** (backend protocol), and **JobStore** (persistence).
 
-## 1. Job Specifications
+## 1. Submitor
 
-### What are they?
-A Job Specification (or "Job Spec") is a dictionary that describes *what* you want to run. It contains all the necessary details for a scheduler to execute your task, such as the command line, resource requirements, and environment variables.
-
-### Why do we need them?
-Compute environments need to know ahead of time what resources a job will consume. A scheduler like SLURM needs to know if you need 1 CPU or 100, and for how long, so it can reserve those resources. By making these explicit in a data structure (a dictionary), we decouple the *what* from the *how*.
-
-### How to use them
-In Molq, you define the spec as a standard Python dictionary.
+The `Submitor` is the single entry point. Each instance is bound to a cluster name and scheduler backend.
 
 ```python
-job_spec = {
-    # The command to run (Result: execution of this list)
-    'cmd': ['python', 'train_model.py', '--epochs', '100'],
-    
-    # Resources (crucial for clusters)
-    'cpus': 4,
-    'memory': '16GB',
-    'time': '04:00:00',
-    
-    # Metadata
-    'job_name': 'training_run_v1'
-}
+from molq import Submitor
+
+local = Submitor("devbox", "local")
+cluster = Submitor("hpc", "slurm")
 ```
 
-## 2. Submitters
+The cluster name is a namespace -- it scopes job listings and reconciliation. You can have multiple `Submitor` instances with different names pointing at the same backend.
 
-### What are they?
-A Submitter is an object that knows how to talk to a specific execution backend. It takes a Job Spec and translates it into the native language of the backend (e.g., generating an `sbatch` script for SLURM or a `subprocess` call for local execution).
+### Defaults
 
-### Why do we need them?
-Different environments have different rules. A local machine just runs a process. A cluster requires authentication, script generation, queue submission, and status polling. The Submitter abstracts complexity away, allowing your code to remain agnostic to the hardware it runs on. You can switch from local testing to cluster production simply by swapping the Submitter.
-
-### How to use them
-You initialize a submitter using the `submit` factory function.
+A `Submitor` can carry defaults applied to every submission:
 
 ```python
-from molq import submit
+from molq import Submitor, SubmitorDefaults, JobResources, JobScheduling, Memory
 
-# A local submitter for testing
-# Usage: Runs jobs immediately as subprocesses
-dev_backend = submit('dev_cluster', 'local')
+defaults = SubmitorDefaults(
+    resources=JobResources(cpu_count=4, memory=Memory.gb(16)),
+    scheduling=JobScheduling(queue="compute"),
+)
 
-# A SLURM submitter for production
-# Usage: Generates .sbatch files and runs 'sbatch' command
-prod_backend = submit('prod_cluster', 'slurm')
+cluster = Submitor("hpc", "slurm", defaults=defaults)
+
+# cpu_count=4 and memory=16GB applied unless overridden
+job = cluster.submit(argv=["python", "script.py"])
 ```
 
-## 3. The Decorator & Generator Interface
+Per-submit parameters override defaults at the field level.
 
-### What is it?
-This is the "magic" that binds your Python functions to the Submitters. By decorating a generator function with a Submitter, you turn a regular Python function into a job definition.
+## 2. Command Model
 
-### Why do we need it?
-We need a way to integrate job submission into Python's control flow. Simply calling a function `submit_job(...)` works, but it can be clunky for complex workflows involving dependencies.
+Every job needs exactly one command specification:
 
-Generators allow us to **pause** execution. When you `yield` a Job Spec, your function pauses. Molq takes the spec, submits the job, and (optionally) waits for it or returns the ID immediately. This allows you to write linear, readable code that actually orchestrates asynchronous, distributed processes.
+| Form | Use case |
+|------|----------|
+| `argv=["python", "train.py"]` | Structured args, no shell interpretation |
+| `command="python train.py && python eval.py"` | Single-line shell command |
+| `script=Script.inline("...")` | Multi-line script content |
+| `script=Script.path("run.sh")` | Reference to a script file |
 
-### How to use it
-Apply the submitter instance as a decorator (`@backend`) to any function that `yields` job specs.
+`argv` is the safest -- arguments are never shell-interpreted. `command` is a convenience for simple one-liners. `Script` handles multi-line logic or existing shell scripts.
+
+## 3. Typed Resource Specs
+
+Resources are specified with frozen dataclasses, not raw strings or dicts:
 
 ```python
-@prod_backend
-def complex_workflow(data_file):
-    # Step 1: Submit a preprocessing job
-    # We yield the spec, and get back a job ID
-    prep_id = yield {
-        'cmd': ['python', 'preprocess.py', data_file],
-        'cpus': 2
-    }
-    
-    # Step 2: Submit a training job that depends on Step 1
-    # We use the previous job ID as a dependency
-    train_id = yield {
-        'cmd': ['python', 'train.py'],
-        'dependency': prep_id,  # Wait for prep_id to finish
-        'gpus': 1
-    }
-    
-    return train_id
+from molq import JobResources, Memory, Duration
+
+resources = JobResources(
+    cpu_count=8,
+    memory=Memory.gb(32),      # Not "32GB" -- typed value
+    gpu_count=2,
+    time_limit=Duration.hours(4),
+)
 ```
 
-In this example, the logic flows naturally from top to bottom, but under the hood, Molq is orchestrating distinct jobs on a remote cluster.
+This prevents misconfigured submissions (typos, unit errors) and enables scheduler-specific formatting -- `Memory.gb(32)` becomes `"32G"` for SLURM but `"32gb"` for PBS.
+
+## 4. Scheduler Protocol
+
+Under the hood, each backend implements the `Scheduler` protocol:
+
+```python
+class Scheduler(Protocol):
+    def submit(self, spec: JobSpec, job_dir: Path) -> str: ...
+    def poll_many(self, scheduler_job_ids: Sequence[str]) -> dict[str, JobState]: ...
+    def cancel(self, scheduler_job_id: str) -> None: ...
+    def resolve_terminal(self, scheduler_job_id: str) -> JobState | None: ...
+```
+
+You never interact with schedulers directly -- `Submitor` handles everything. But this protocol makes adding new backends straightforward: implement four methods.
+
+**Available backends:** `LocalScheduler`, `SlurmScheduler`, `PBSScheduler`, `LSFScheduler`.
+
+## 5. Job Lifecycle
+
+A job moves through these states:
+
+```
+CREATED ──> SUBMITTED ──> QUEUED ──> RUNNING ──> SUCCEEDED
+                                          └──> FAILED
+                                          └──> TIMED_OUT
+                                          └──> CANCELLED
+                                          └──> LOST
+```
+
+States are represented by `JobState`, a string enum with an `is_terminal` property:
+
+```python
+from molq import JobState
+
+JobState.RUNNING.is_terminal    # False
+JobState.SUCCEEDED.is_terminal  # True
+```
+
+## 6. Persistence
+
+All job state is persisted in SQLite (WAL mode) at `~/.molq/jobs.db`. The `JobStore` tracks:
+
+- Job records with UUID-based identity
+- Status transitions with timestamps
+- Scheduler-assigned IDs
+
+This means jobs survive process restarts. You can query past jobs, inspect transition history, or resume monitoring after a disconnect.
+
+## 7. Reconciliation
+
+The `JobReconciler` syncs scheduler state with the database:
+
+1. Load all active (non-terminal) jobs from the store
+2. Batch-query the scheduler for their current states
+3. Compute diffs between stored and actual states
+4. Apply transitions to the store
+
+This happens automatically during `wait()`, `refresh()`, and `watch()`.
+
+## 8. Monitoring
+
+The `JobMonitor` provides blocking waits with pluggable polling strategies:
+
+- **ExponentialBackoffStrategy** (default): starts at 1s, grows to 60s max. Reduces a 24h job from ~43k polls to ~60.
+- **FixedStrategy**: constant interval, simple but wasteful.
+- **AdaptiveStrategy**: polls at ~1% of expected duration.
+
+## Architecture Diagram
+
+```
+Submitor  ──>  Scheduler (Protocol)  ──>  Local | SLURM | PBS | LSF
+    │                │
+    │           submit / poll_many / cancel / resolve_terminal
+    │
+    ├── JobStore (SQLite + WAL)
+    │       └── jobs, status_transitions, molq_meta
+    │
+    ├── JobReconciler
+    │       └── batch poll ──> diff ──> apply transitions
+    │
+    └── JobMonitor
+            └── PollingStrategy (exponential, fixed, adaptive)
+```

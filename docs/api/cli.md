@@ -1,79 +1,90 @@
 # CLI Reference
 
-Molq provides a command-line interface (CLI) for submitting and managing jobs directly from the terminal. This is useful for running one-off scripts, checking job status, or integrating Molq into shell-based pipelines.
+Molq provides a Typer + Rich CLI for managing jobs from the terminal.
 
-## Global Options
+## Global
 
-| Option | Description |
-|--------|-------------|
-| `--version` | Show the version and exit. |
-| `--help` | Show the help message and exit. |
+```bash
+molq --help
+```
 
 ## Commands
 
 ### `molq submit`
 
-Submits a job to a specified scheduler. You can pass the command as arguments or pipe a script via stdin.
+Submit a job to a scheduler backend.
 
-**Usage:**
 ```bash
-molq submit [OPTIONS] {local|slurm} [COMMAND_ARGS]...
+molq submit SCHEDULER [COMMAND]... [OPTIONS]
 ```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `SCHEDULER` | Backend: `local`, `slurm`, `pbs`, `lsf` |
+| `COMMAND` | Command and arguments to execute |
 
 **Options:**
 
-| Option | Alias | Description |
-|--------|-------|-------------|
-| `--cpu-count` | `--n-cpus` | Number of CPU cores to request. |
-| `--memory` | `--mem` | Memory requirement (e.g., `8G`, `512M`). |
-| `--time` | `--time-limit` | Time limit (e.g., `2h`, `30m`, `1d`). |
-| `--queue` | `--partition` | Queue or partition name. |
-| `--gpu-count` | `--n-gpus` | Number of GPUs to request. |
-| `--gpu-type` | | Specific GPU type (e.g., `V100`, `A100`). |
-| `--job-name` | | Human-readable name for the job. |
-| `--workdir` | | Working directory for execution. |
-| `--email` | | Email address for notifications. |
-| `--priority` | | Job priority (`low`, `normal`, `high`). |
-| `--account` | | Account to charge resources to. |
-| `--block` / `--no-block` | | Wait for job completion (default: `False`). |
-| `--cleanup` / `--no-cleanup` | | Clean up temporary files (default: `True`). |
-| `--dry-run` | | Show the job configuration without submitting. |
+| Option | Description |
+|--------|-------------|
+| `--cpus INT` | CPU cores |
+| `--mem TEXT` | Memory (e.g. `8G`, `512M`) |
+| `--time TEXT` | Time limit (e.g. `4h`, `01:30:00`) |
+| `--gpus INT` | GPU count |
+| `--gpu-type TEXT` | GPU type (e.g. `a100`) |
+| `--queue TEXT` | Queue/partition name |
+| `--name TEXT` | Job name |
+| `--workdir TEXT` | Working directory |
+| `--account TEXT` | Billing account |
+| `--cluster TEXT` | Cluster namespace |
+| `--block` | Wait for completion |
 
 **Examples:**
 
-Run a simple command locally:
 ```bash
+# Local execution
 molq submit local echo "Hello World"
-```
 
-Submit a job to SLURM with resource requirements:
-```bash
-molq submit slurm --cpu-count 8 --memory 16G srun lmp -in input.lmp
-```
+# SLURM with resources
+molq submit slurm --cpus 8 --mem 32G --time 4h python train.py
 
-Submit a script from pipe:
-```bash
-echo "python train.py" | molq submit slurm --n-gpus 1 --time 4h
+# GPU job
+molq submit slurm --gpus 2 --gpu-type a100 --mem 64G python train.py
+
+# Wait for completion
+molq submit local --block python long_script.py
 ```
 
 ---
 
 ### `molq list`
 
-Lists submitted jobs. By default, it shows active jobs.
+List submitted jobs.
 
-**Usage:**
 ```bash
-molq list [OPTIONS]
+molq list [SCHEDULER] [OPTIONS]
 ```
+
+**Arguments:**
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `SCHEDULER` | `local` | Scheduler backend |
 
 **Options:**
 
 | Option | Description |
 |--------|-------------|
-| `--scheduler` | Filter by scheduler (`local` or `slurm`). |
-| `--all-history` | Show all jobs including finished/cancelled ones. |
-| `--verbose` | Show detailed job information. |
+| `--cluster TEXT` | Cluster namespace |
+| `--all` | Include terminal (finished) jobs |
+
+**Example:**
+
+```bash
+molq list slurm --all --cluster hpc
+```
 
 ---
 
@@ -81,63 +92,66 @@ molq list [OPTIONS]
 
 Get the status of a specific job.
 
-**Usage:**
 ```bash
-molq status [OPTIONS] JOB_ID
+molq status JOB_ID [SCHEDULER]
 ```
+
+**Arguments:**
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `JOB_ID` | (required) | Job UUID |
+| `SCHEDULER` | `local` | Scheduler backend |
 
 **Options:**
 
 | Option | Description |
 |--------|-------------|
-| `--scheduler` | Scheduler to query (`local` or `slurm`). If omitted, you must format `JOB_ID` as `scheduler-id`. |
+| `--cluster TEXT` | Cluster namespace |
 
-**Example:**
+---
+
+### `molq watch`
+
+Watch a job until it reaches a terminal state.
+
 ```bash
-molq status slurm-12345
-# or
-molq status 12345 --scheduler slurm
+molq watch JOB_ID [SCHEDULER] [OPTIONS]
 ```
+
+**Arguments:**
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `JOB_ID` | (required) | Job UUID |
+| `SCHEDULER` | `local` | Scheduler backend |
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--cluster TEXT` | Cluster namespace |
+| `--timeout FLOAT` | Maximum wait time in seconds |
 
 ---
 
 ### `molq cancel`
 
-Cancels a running or pending job.
+Cancel a running or pending job.
 
-**Usage:**
 ```bash
-molq cancel [OPTIONS] JOB_ID
+molq cancel JOB_ID [SCHEDULER]
 ```
+
+**Arguments:**
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `JOB_ID` | (required) | Job UUID |
+| `SCHEDULER` | `local` | Scheduler backend |
 
 **Options:**
 
 | Option | Description |
 |--------|-------------|
-| `--scheduler` | Scheduler execution the job (`local` or `slurm`). |
-
----
-
-### `molq config`
-
-Manage Molq configuration. This allows you to set defaults for your environment.
-
-**Commands:**
-
-#### `molq config show`
-Show the current configuration.
-```bash
-molq config show [KEY]
-```
-
-#### `molq config set`
-Set a configuration value.
-```bash
-molq config set KEY VALUE
-```
-
-**Example:**
-Set default SLURM host:
-```bash
-molq config set slurm.host my-cluster-node
-```
+| `--cluster TEXT` | Cluster namespace |

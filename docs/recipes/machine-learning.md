@@ -1,86 +1,145 @@
 # Machine Learning Workflows
 
-Machine Learning workflows often involve complex dependency chains—such as preprocessing data before training, or evaluating multiple models in parallel. Additionally, they often require specific hardware resources like GPUs.
-
-Molq simplifies these workflows by allowing you to:
-1.  **Define Dependencies**: Ensure training doesn't start until preprocessing is complete.
-2.  **Request GPUs**: Easily specify `gpus: 1` in your job spec.
-3.  **Parallelize**: Submit multiple training jobs at once (e.g., for hyperparameter tuning).
+Machine learning workflows often involve sequential pipelines, GPU resources, and parallel hyperparameter sweeps. Molq handles all of these with typed resource specs.
 
 ## Model Training Pipeline
 
-This example demonstrates a standard sequence: Preprocessing -> Training. Note how the `train_job` uses the `dependency` key to wait for `prep_job`.
+A standard preprocessing -> training pipeline:
 
 ```python
-from molq import submit
+from molq import Submitor, JobResources, JobScheduling, Memory, Duration
 
-cluster = submit('ml_cluster', 'slurm')
+cluster = Submitor("ml_cluster", "slurm")
 
-@cluster
-def train_model(dataset: str, model_type: str):
-    # Preprocess data
-    prep_job = yield {
-        'cmd': ['python', 'preprocess.py', dataset],
-        'cpus': 4, 'memory': '16GB', 'time': '01:00:00'
-    }
+# Step 1: Preprocessing
+prep = cluster.submit(
+    argv=["python", "preprocess.py", "dataset.csv"],
+    resources=JobResources(cpu_count=4, memory=Memory.gb(16)),
+)
+prep_record = prep.wait()
 
-    # Train model
-    # We pass 'prep_job' (which is a job_id) as a dependency.
-    # The scheduler will hold this job until prep_job is successful.
-    train_job = yield {
-        'cmd': ['python', 'train.py', model_type],
-        'dependency': prep_job,
-        'cpus': 16, 'memory': '64GB', 'time': '08:00:00',
-        'gpus': 1  # Request 1 GPU
-    }
-
-    return train_job
+# Step 2: Training (only after preprocessing succeeds)
+if prep_record.state.value == "succeeded":
+    train = cluster.submit(
+        argv=["python", "train.py", "--model", "resnet50"],
+        resources=JobResources(
+            cpu_count=16,
+            memory=Memory.gb(64),
+            gpu_count=1,
+            time_limit=Duration.hours(8),
+        ),
+        scheduling=JobScheduling(queue="gpu"),
+    )
+    train_record = train.wait()
+    print(f"Training: {train_record.state.value}")
 ```
 
 ## Hyperparameter Tuning
 
-Hyperparameter tuning is a classic "embarrassingly parallel" problem. With Molq, you can simply loop over your parameters and `yield` a job for each one. Molq will submit them all to the queue, and the scheduler will run as many as possible in parallel.
+Submit multiple training jobs in parallel with different parameters:
 
 ```python
-@cluster
-def hyperparameter_search(param_grid: list):
-    jobs = []
-    for params in param_grid:
-        # Submit a job for this parameter set
-        job = yield {
-            'cmd': ['python', 'train.py', '--params', str(params)],
-            'cpus': 8, 'memory': '32GB', 'time': '04:00:00',
-            'job_name': f'train_{params["lr"]}'
-        }
-        jobs.append(job)
-    
-    return jobs
+from molq import Submitor, JobResources, JobScheduling, JobExecution, Memory, Duration
 
-# Usage
-param_combinations = [
-    {'lr': 0.01, 'batch_size': 32},
-    {'lr': 0.001, 'batch_size': 64},
+cluster = Submitor("ml_cluster", "slurm")
+
+param_grid = [
+    {"lr": "0.01", "batch_size": "32"},
+    {"lr": "0.001", "batch_size": "64"},
+    {"lr": "0.0001", "batch_size": "128"},
 ]
-# This submits 2 jobs instantly
-search_jobs = hyperparameter_search(param_combinations)
+
+jobs = []
+for params in param_grid:
+    job = cluster.submit(
+        argv=[
+            "python", "train.py",
+            "--lr", params["lr"],
+            "--batch-size", params["batch_size"],
+        ],
+        resources=JobResources(
+            cpu_count=8,
+            memory=Memory.gb(32),
+            gpu_count=1,
+            time_limit=Duration.hours(4),
+        ),
+        scheduling=JobScheduling(queue="gpu"),
+        execution=JobExecution(job_name=f"hp_lr{params['lr']}"),
+    )
+    jobs.append(job)
+
+# Wait for all jobs to finish
+records = cluster.watch([j.job_id for j in jobs], timeout=14400)
+
+for r in records:
+    print(f"{r.command_display[:40]}  {r.state.value}  exit={r.exit_code}")
 ```
 
 ## Distributed Training
 
-For large models, you may need multiple nodes. Molq supports this via the `nodes` and `ntasks_per_node` parameters, which map directly to scheduler options (like `#SBATCH --nodes`).
+Multi-node training with `torch.distributed`:
 
 ```python
-@cluster
-def distributed_training(nodes: int):
-    # We yield the configuration to start the job
-    job_id = yield {
-        'cmd': ['python', '-m', 'torch.distributed.launch',
-               '--nproc_per_node=4', 'train_distributed.py'],
-        'nodes': nodes,
-        'cpus': 16,
-        'memory': '64GB',
-        'time': '12:00:00',
-        'gpus': 4  # 4 GPUs per node
-    }
-    return job_id
+from molq import Submitor, JobResources, JobScheduling, Memory, Duration, Script
+
+cluster = Submitor("ml_cluster", "slurm")
+
+job = cluster.submit(
+    script=Script.inline("""
+module load cuda/12.0
+export MASTER_ADDR=$(hostname)
+export MASTER_PORT=29500
+srun python -m torch.distributed.run \\
+    --nproc_per_node=4 \\
+    train_distributed.py
+"""),
+    resources=JobResources(
+        cpu_count=16,
+        memory=Memory.gb(128),
+        gpu_count=4,
+        time_limit=Duration.hours(12),
+    ),
+    scheduling=JobScheduling(
+        queue="gpu",
+        node_count=2,
+        exclusive_node=True,
+    ),
+)
+
+record = job.wait()
+print(f"Training: {record.state.value}")
+```
+
+## Evaluation Pipeline
+
+Run evaluation after training completes:
+
+```python
+from molq import Submitor, JobResources, Memory, Duration
+
+cluster = Submitor("ml_cluster", "slurm")
+
+# Train
+train_job = cluster.submit(
+    argv=["python", "train.py", "--output", "model.pt"],
+    resources=JobResources(
+        cpu_count=16, memory=Memory.gb(64),
+        gpu_count=2, time_limit=Duration.hours(8),
+    ),
+)
+train_record = train_job.wait()
+
+# Evaluate on multiple datasets
+if train_record.state.value == "succeeded":
+    eval_jobs = []
+    for dataset in ["test_a", "test_b", "test_c"]:
+        job = cluster.submit(
+            argv=["python", "evaluate.py", "--model", "model.pt", "--data", dataset],
+            resources=JobResources(cpu_count=4, memory=Memory.gb(16)),
+        )
+        eval_jobs.append(job)
+
+    records = cluster.watch([j.job_id for j in eval_jobs])
+    for r in records:
+        print(f"{r.command_display}  -> {r.state.value}")
 ```

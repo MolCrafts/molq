@@ -1,6 +1,6 @@
 [project]
 site_name = "Molq"
-site_description = "Modern job queue for local and cluster runners"
+site_description = "Unified job queue for local and HPC cluster execution"
 site_author = "Roy Kid"
 repo_url = "https://github.com/molcrafts/molq"
 
@@ -59,8 +59,6 @@ generator = "to_svg"
 search = {}
 
 [plugins.mkdocstrings]
-# Use the common structure for plugins if possible, or follow zensical specific docs.
-# For now, I'll use the mkdocs-like structure as zensical aims for compatibility.
 handlers.python.options = { docstring_style = "google", show_source = false, members_order = "source", group_by_category = true }
 
 [nav]
@@ -77,7 +75,8 @@ Home = "index.md"
 
 [nav."API Reference"]
 Overview = "api/index.md"
-"Submit Decorators" = "api/submit.md"
+"Submitor API" = "api/submit.md"
+"Types" = "api/resources.md"
 "CLI Reference" = "api/cli.md"
 
 [nav.Specification]

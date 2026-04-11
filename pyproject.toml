@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "molcrafts-molq"
 version = "0.1.0"
-description = "Modern job queue for local and cluster runners"
+description = "Unified job queue for local and HPC cluster execution"
 authors = [
     {name = "Roy Kid", email = "lijichen365@gmail.com"}
 ]
@@ -26,8 +26,8 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "pydantic>=2.0",
-    "click>=8.0"
+    "typer>=0.9",
+    "rich>=13.0",
 ]
 
 [project.urls]
@@ -38,7 +38,7 @@ Issues = "https://github.com/molcrafts/molq/issues"
 Changelog = "https://github.com/molcrafts/molq/blob/main/CHANGELOG.md"
 
 [project.scripts]
-molq = "molq.cli.main:cli"
+molq = "molq.cli.main:app"
 
 
 [project.optional-dependencies]
@@ -63,7 +63,7 @@ where = ["src"]
 
 [tool.black]
 line-length = 88
-target-version = ['py39']
+target-version = ['py310']
 
 [tool.isort]
 profile = "black"

@@ -1,78 +1,137 @@
-# Getting Started with Molq
+# Getting Started
 
-This tutorial will guide you through installing Molq and running your first job. We will start with a local setup so you can test everything immediately without needing access to a cluster.
+This guide walks you through installing Molq and running your first job.
 
 ## 1. Installation
 
-First, we need to install the Molq library. It is available via pip, making it easy to add to your Python environment.
+```bash
+pip install molcrafts-molq
+```
+
+## 2. Your First Submitor
+
+A `Submitor` is the entry point for job submission. It connects to a specific scheduler backend. Start with a **local** submitor -- it runs jobs as subprocesses on your machine.
+
+```python
+from molq import Submitor
+
+# "devbox" is a name for this cluster namespace
+# "local" is the scheduler backend
+local = Submitor("devbox", "local")
+```
+
+## 3. Submitting a Job
+
+Call `submit()` with one of three command forms: `argv`, `command`, or `script`.
+
+```python
+# Submit a simple command
+job = local.submit(argv=["echo", "Hello from Molq!"])
+
+print(f"Job ID:  {job.job_id}")
+print(f"Status:  {job.status()}")
+```
+
+`submit()` returns a `JobHandle` -- a lightweight object for tracking the submitted job.
+
+## 4. Waiting for Completion
+
+Call `wait()` on the handle to block until the job finishes:
+
+```python
+record = job.wait()
+
+print(f"State:     {record.state}")       # JobState.SUCCEEDED
+print(f"Exit code: {record.exit_code}")   # 0
+```
+
+The returned `JobRecord` is an immutable snapshot of the job's full lifecycle.
+
+## 5. Adding Resources
+
+For real workloads, specify resources with typed objects:
+
+```python
+from molq import Submitor, JobResources, Memory, Duration
+
+local = Submitor("devbox", "local")
+
+job = local.submit(
+    argv=["python", "experiment.py"],
+    resources=JobResources(
+        cpu_count=4,
+        memory=Memory.gb(8),
+        time_limit=Duration.hours(2),
+    ),
+)
+
+record = job.wait()
+print(record.state)
+```
+
+Resource types like `Memory` and `Duration` are immutable and parse human-readable strings:
+
+```python
+Memory.parse("8GB")       # Memory(bytes=8589934592)
+Duration.parse("2h30m")   # Duration(seconds=9000)
+```
+
+## 6. Using Scripts
+
+For multi-line workflows, use `Script`:
+
+```python
+from molq import Script
+
+job = local.submit(script=Script.inline("""
+cd /workspace
+python preprocess.py
+python train.py --epochs 100
+"""))
+
+record = job.wait()
+```
+
+Or reference an existing script file:
+
+```python
+job = local.submit(script=Script.path("run_experiment.sh"))
+```
+
+## 7. Listing and Managing Jobs
+
+```python
+# List active jobs
+for r in local.list():
+    print(f"{r.job_id[:8]}  {r.state.value}")
+
+# Get a specific job
+record = local.get(job.job_id)
+
+# Cancel a job
+local.cancel(job.job_id)
+```
+
+## 8. CLI
+
+Molq also provides a command-line interface:
 
 ```bash
-pip install molq
+# Submit
+molq submit local echo "Hello World"
+
+# List
+molq list local
+
+# Watch
+molq watch <job-id> local
+
+# Cancel
+molq cancel <job-id> local
 ```
-
-Once installed, you can import it in your Python scripts.
-
-## 2. Your First Submitter
-
-In Molq, a **Submitter** is the agent responsible for taking your job descriptions and sending them to a compute backend. Before you can run any jobs, you need to tell Molq *where* to run them.
-
-We typically start with a **Local Submitter**. This runs jobs directly on your current machine as subprocesses. It is perfect for development, testing, and small-scale workflows.
-
-```python
-from molq import submit
-
-# Create a submitter named 'dev' that uses the 'local' backend.
-# The first argument is a unique name for this submitter instance.
-# The second argument 'local' specifies the backend type.
-local_runner = submit('dev', 'local')
-```
-
-## 3. Defining a Job
-
-Molq uses a unique pattern to define jobs: **decorated generator functions**.
-
-Why generators? Because a workflow often involves submitting a job, waiting for it, and then doing something with the result (like submitting another job). Python's `yield` keyword provides a perfect mechanism for this "pause and resume" behavior.
-
-To define a job, you write a function that `yields` a configuration dictionary. You then apply your submitter (`@local_runner`) as a decorator.
-
-```python
-@local_runner
-def run_simulation(steps: int):
-    # This dictionary describes the job to the backend
-    job_config = {
-        'cmd': ['echo', f'Running simulation with {steps} steps...'],
-        'job_name': 'sim_test',
-        'env': {'SIM_LEVEL': '1'}
-    }
-    
-    # We 'yield' the config to submit the job.
-    # The submitter receives this, runs the command, and sends back the job_id.
-    job_id = yield job_config
-    
-    return job_id
-```
-
-## 4. Running the Job
-
-Now that we have defined the job, running it is as simple as calling the Python function.
-
-When you call the decorated function, Molq takes over. It steps through your generator, handling every `yield` by submitting a job to the configured backend.
-
-```python
-if __name__ == "__main__":
-    print("Submitting job...")
-    
-    # This call submits the job to the local runner
-    result_id = run_simulation(100)
-    
-    print(f"Job submitted! ID: {result_id}")
-```
-
-If you run this script, you will see the output of your job (since it's running locally) or a confirmation that it was submitted.
 
 ## Next Steps
 
-Now that you have run a simple local job, you are ready to explore the deeper concepts that make Molq powerful.
-
-*   **[Core Concepts](core-concepts.md)**: Learn more about how the Submitter, Decorator, and Job Spec work together.
-*   **[Recipes](../recipes/machine-learning.md)**: See real-world examples of Molq in action.
+- **[Core Concepts](core-concepts.md)** -- How the architecture works
+- **[API Reference](../api/index.md)** -- Complete type and class documentation
+- **[Recipes](../recipes/machine-learning.md)** -- Real-world examples

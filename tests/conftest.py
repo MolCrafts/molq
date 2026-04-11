@@ -123,8 +123,7 @@ def test_script_dir(tmp_path):
 
     # Create a simple test script
     test_script = script_dir / "test_script.py"
-    test_script.write_text(
-        """#!/usr/bin/env python3
+    test_script.write_text("""#!/usr/bin/env python3
 import sys
 import time
 import os
@@ -132,8 +131,7 @@ import os
 print(f"Test script running with args: {sys.argv[1:]}")
 print(f"Working directory: {os.getcwd()}")
 print("Test script completed successfully")
-"""
-    )
+""")
     test_script.chmod(0o755)
 
     return script_dir
