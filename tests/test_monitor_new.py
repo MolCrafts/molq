@@ -1,11 +1,11 @@
 """Tests for molq.monitor — JobMonitor wait/timeout."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from molq.errors import MolqTimeoutError
-from molq.models import Command, JobRecord, JobSpec
+from molq.models import Command, JobSpec
 from molq.monitor import JobMonitor
 from molq.reconciler import JobReconciler
 from molq.status import JobState

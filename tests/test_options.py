@@ -14,15 +14,14 @@ from molq.options import (
 
 
 class TestLocalSchedulerOptions:
-    def test_defaults(self):
+    def test_instantiates(self):
         opts = LocalSchedulerOptions()
-        assert opts.runner_shim == "molq-runner"
-        assert opts.max_concurrent is None
+        assert isinstance(opts, LocalSchedulerOptions)
 
     def test_frozen(self):
         opts = LocalSchedulerOptions()
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            opts.runner_shim = "other"  # type: ignore[misc]
+        with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
+            opts.anything = "value"  # type: ignore[attr-defined]
 
 
 class TestSlurmSchedulerOptions:

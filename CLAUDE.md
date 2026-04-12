@@ -22,12 +22,17 @@ python -m pytest tests/test_store.py
 python -m pytest tests/test_store.py::TestInsertAndGet::test_insert_and_get -v
 
 # Format code
-black src/ tests/
-isort src/ tests/
+ruff format src/ tests/
+
+# Lint code
+ruff check src/ tests/
 
 # Check formatting (CI mode)
-black --check src/ tests/
-isort --check-only src/ tests/
+ruff format --check src/ tests/
+ruff check src/ tests/
+
+# Type check
+ty check src/
 
 # Build package
 python -m build

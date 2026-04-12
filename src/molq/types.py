@@ -1,7 +1,7 @@
 """Public value types for molq.
 
-Provides Memory, Duration, Script, JobResources, JobScheduling, JobExecution.
-All types are frozen (immutable) dataclasses.
+Provides Memory, Duration, Script, DependencyRef, JobResources, JobScheduling,
+and JobExecution. All types are frozen (immutable) dataclasses.
 """
 
 from __future__ import annotations
@@ -9,6 +9,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+# Canonical set of dependency conditions.  Used as the type for
+# DependencyRef.condition and as a shared reference for all condition-dispatch
+# tables in submitor.py and store.py.
+DependencyCondition = Literal[
+    "after_started", "after", "after_success", "after_failure"
+]
 
 # ---------------------------------------------------------------------------
 # Memory
@@ -224,6 +232,14 @@ class Script:
 
 
 @dataclass(frozen=True)
+class DependencyRef:
+    """Logical dependency on another molq job."""
+
+    job_id: str
+    condition: DependencyCondition = "after_success"
+
+
+@dataclass(frozen=True)
 class JobResources:
     """Hardware requirements for job execution."""
 
@@ -242,12 +258,20 @@ class JobScheduling:
     account: str | None = None
     priority: str | None = None
     dependency: str | None = None
+    dependencies: tuple[DependencyRef, ...] = ()
     node_count: int | None = None
     exclusive_node: bool = False
     array_spec: str | None = None
     email: str | None = None
     qos: str | None = None
     reservation: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.dependency is not None and self.dependencies:
+            raise ValueError(
+                "JobScheduling: 'dependency' (raw scheduler string) and 'dependencies'"
+                " (logical refs) are mutually exclusive — pick one approach"
+            )
 
 
 @dataclass(frozen=True)

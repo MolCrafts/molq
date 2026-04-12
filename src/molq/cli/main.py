@@ -7,11 +7,15 @@ across local and cluster schedulers.
 
 import sys
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Iterator, Optional
+from typing import TYPE_CHECKING, Annotated
+
+if TYPE_CHECKING:
+    from molq import JobRecord, Submitor
 
 import typer
 from rich import print as rprint
@@ -28,7 +32,7 @@ app = typer.Typer(
 console = Console(stderr=True)
 
 
-class SchedulerType(str, Enum):
+class SchedulerType(StrEnum):
     local = "local"
     slurm = "slurm"
     pbs = "pbs"
@@ -39,12 +43,36 @@ class SchedulerType(str, Enum):
 def _open_submitor(
     scheduler: SchedulerType,
     cluster: str | None = None,
-) -> Iterator["Submitor"]:  # type: ignore[name-defined]
+    profile: str | None = None,
+    config_path: str | None = None,
+) -> Iterator["Submitor"]:
     """Open a Submitor for the CLI and guarantee its connection is closed."""
     from molq import Submitor
+    from molq.config import load_profile
 
-    cluster_name = cluster or f"cli_{scheduler.value}"
-    submitor = Submitor(cluster_name, scheduler.value)
+    if profile:
+        loaded = load_profile(profile, config_path)
+        if loaded.scheduler != scheduler.value:
+            raise typer.BadParameter(
+                f"profile {profile!r} uses scheduler {loaded.scheduler!r}, "
+                f"not {scheduler.value!r}"
+            )
+        cluster_name = cluster or loaded.cluster_name
+        submitor = Submitor.from_profile(profile, config_path=config_path)
+        if cluster is not None and cluster != loaded.cluster_name:
+            submitor = Submitor(
+                cluster_name,
+                scheduler.value,
+                defaults=loaded.defaults,
+                scheduler_options=loaded.scheduler_options,
+                jobs_dir=loaded.jobs_dir,
+                default_retry_policy=loaded.retry,
+                retention_policy=loaded.retention,
+                profile_name=loaded.name,
+            )
+    else:
+        cluster_name = cluster or f"cli_{scheduler.value}"
+        submitor = Submitor(cluster_name, scheduler.value)
     try:
         yield submitor
     finally:
@@ -70,7 +98,7 @@ def _state_style(state: str) -> str:
     }.get(state, "")
 
 
-def _log_paths(record: "JobRecord", stream_name: str) -> dict[str, Path]:  # type: ignore[name-defined]
+def _log_paths(record: "JobRecord", stream_name: str) -> dict[str, Path]:
     stream_keys = {
         "stdout": "molq.stdout_path",
         "stderr": "molq.stderr_path",
@@ -104,11 +132,16 @@ def _read_text(path: Path) -> str:
     return path.read_text(errors="replace")
 
 
-def _follow_logs(submitor: "Submitor", job_id: str, stream_name: str, tail: int | None) -> None:  # type: ignore[name-defined]
+def _follow_logs(
+    submitor: "Submitor", job_id: str, stream_name: str, tail: int | None
+) -> None:
     record = submitor.get(job_id)
     paths = _log_paths(record, stream_name)
     labeled = stream_name == "both"
-    handles = {name: path.open("r", encoding="utf-8", errors="replace") for name, path in paths.items()}
+    handles = {
+        name: path.open("r", encoding="utf-8", errors="replace")
+        for name, path in paths.items()
+    }
     try:
         for name, handle in handles.items():
             initial = handle.read()
@@ -136,6 +169,18 @@ def _follow_logs(submitor: "Submitor", job_id: str, stream_name: str, tail: int 
             handle.close()
 
 
+def _dependency_relation_state(dependency_type: str, record: "JobRecord") -> str:
+    from molq.store import dependency_relation_state
+
+    return dependency_relation_state(dependency_type, record.state, record.started_at)
+
+
+def _dependency_marker(relation_state: str) -> str:
+    return {"satisfied": "✓", "pending": "·", "impossible": "!"}.get(
+        relation_state, "·"
+    )
+
+
 # ---------------------------------------------------------------------------
 # submit
 # ---------------------------------------------------------------------------
@@ -145,29 +190,69 @@ def _follow_logs(submitor: "Submitor", job_id: str, stream_name: str, tail: int 
 def submit(
     scheduler: Annotated[SchedulerType, typer.Argument(help="Scheduler backend")],
     command: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         typer.Argument(help="Command to execute"),
     ] = None,
-    cpu_count: Annotated[
-        Optional[int], typer.Option("--cpus", help="CPU cores")
-    ] = None,
+    cpu_count: Annotated[int | None, typer.Option("--cpus", help="CPU cores")] = None,
     memory: Annotated[
-        Optional[str], typer.Option("--mem", help="Memory (e.g. 8G)")
+        str | None, typer.Option("--mem", help="Memory (e.g. 8G)")
     ] = None,
-    time_limit: Annotated[
-        Optional[str], typer.Option("--time", help="Time limit")
+    time_limit: Annotated[str | None, typer.Option("--time", help="Time limit")] = None,
+    queue: Annotated[str | None, typer.Option(help="Queue/partition")] = None,
+    gpu_count: Annotated[int | None, typer.Option("--gpus", help="GPUs")] = None,
+    gpu_type: Annotated[str | None, typer.Option(help="GPU type")] = None,
+    job_name: Annotated[str | None, typer.Option("--name", help="Job name")] = None,
+    workdir: Annotated[str | None, typer.Option(help="Working directory")] = None,
+    account: Annotated[str | None, typer.Option(help="Billing account")] = None,
+    cluster: Annotated[str | None, typer.Option(help="Cluster name")] = None,
+    profile: Annotated[str | None, typer.Option(help="Profile name")] = None,
+    config: Annotated[str | None, typer.Option(help="Path to config.toml")] = None,
+    retries: Annotated[
+        int | None, typer.Option("--retries", help="Maximum attempts")
     ] = None,
-    queue: Annotated[Optional[str], typer.Option(help="Queue/partition")] = None,
-    gpu_count: Annotated[Optional[int], typer.Option("--gpus", help="GPUs")] = None,
-    gpu_type: Annotated[Optional[str], typer.Option(help="GPU type")] = None,
-    job_name: Annotated[Optional[str], typer.Option("--name", help="Job name")] = None,
-    workdir: Annotated[Optional[str], typer.Option(help="Working directory")] = None,
-    account: Annotated[Optional[str], typer.Option(help="Billing account")] = None,
-    cluster: Annotated[Optional[str], typer.Option(help="Cluster name")] = None,
+    retry_on_exit_code: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--retry-on-exit-code",
+            help="Retry only for the specified exit code(s)",
+        ),
+    ] = None,
+    after: Annotated[
+        list[str] | None,
+        typer.Option("--after", help="Wait until the given molq job(s) finish"),
+    ] = None,
+    after_started: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--after-started",
+            help="Wait until the given molq job(s) start running",
+        ),
+    ] = None,
+    after_failure: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--after-failure",
+            help="Wait until the given molq job(s) fail",
+        ),
+    ] = None,
+    after_success: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--after-success",
+            help="Wait until the given molq job(s) succeed",
+        ),
+    ] = None,
     block: Annotated[bool, typer.Option(help="Wait for completion")] = False,
 ) -> None:
     """Submit a job to the specified scheduler."""
-    from molq import Duration, JobExecution, JobResources, JobScheduling, Memory
+    from molq import (
+        Duration,
+        JobExecution,
+        JobResources,
+        JobScheduling,
+        Memory,
+        RetryPolicy,
+    )
 
     cmd: list[str] = list(command) if command else []
     if not cmd:
@@ -184,17 +269,32 @@ def submit(
     )
     scheduling = JobScheduling(queue=queue, account=account)
     execution = JobExecution(cwd=workdir, job_name=job_name)
+    retry_policy = None
+    if retries is not None:
+        retry_policy = RetryPolicy(
+            max_attempts=retries,
+            retry_on_exit_codes=(
+                None
+                if not retry_on_exit_code
+                else tuple(int(code) for code in retry_on_exit_code)
+            ),
+        )
 
     try:
-        with _open_submitor(scheduler, cluster) as submitor:
+        with _open_submitor(scheduler, cluster, profile, config) as submitor:
             handle = submitor.submit(
                 argv=cmd,
                 resources=resources,
                 scheduling=scheduling,
                 execution=execution,
+                retry=retry_policy,
+                after_started=after_started,
+                after=after,
+                after_failure=after_failure,
+                after_success=after_success,
             )
 
-            rprint(f"[green]Job submitted[/]")
+            rprint("[green]Job submitted[/]")
             rprint(f"  ID:        {handle.job_id}")
             rprint(f"  Scheduler: {scheduler.value}")
             rprint(f"  Command:   {' '.join(cmd)}")
@@ -203,7 +303,7 @@ def submit(
                 record = handle.wait()
                 rprint(f"  Status:    {record.state.value}")
             else:
-                rprint(f"  Status:    submitted")
+                rprint("  Status:    submitted")
 
     except Exception as e:
         console.print(f"[red]Submission failed: {e}[/]")
@@ -220,11 +320,13 @@ def list_jobs(
     scheduler: Annotated[
         SchedulerType, typer.Argument(help="Scheduler")
     ] = SchedulerType.local,
-    cluster: Annotated[Optional[str], typer.Option(help="Cluster name")] = None,
+    cluster: Annotated[str | None, typer.Option(help="Cluster name")] = None,
+    profile: Annotated[str | None, typer.Option(help="Profile name")] = None,
+    config: Annotated[str | None, typer.Option(help="Path to config.toml")] = None,
     all: Annotated[bool, typer.Option("--all", help="Include terminal jobs")] = False,
 ) -> None:
     """List submitted jobs."""
-    with _open_submitor(scheduler, cluster) as submitor:
+    with _open_submitor(scheduler, cluster, profile, config) as submitor:
         submitor.refresh()
         records = submitor.list(include_terminal=all)
 
@@ -262,12 +364,14 @@ def status(
     scheduler: Annotated[
         SchedulerType, typer.Argument(help="Scheduler")
     ] = SchedulerType.local,
-    cluster: Annotated[Optional[str], typer.Option(help="Cluster name")] = None,
+    cluster: Annotated[str | None, typer.Option(help="Cluster name")] = None,
+    profile: Annotated[str | None, typer.Option(help="Profile name")] = None,
+    config: Annotated[str | None, typer.Option(help="Path to config.toml")] = None,
 ) -> None:
     """Get job status."""
     from molq import JobNotFoundError
 
-    with _open_submitor(scheduler, cluster) as submitor:
+    with _open_submitor(scheduler, cluster, profile, config) as submitor:
         submitor.refresh()
         try:
             record = submitor.get(job_id)
@@ -296,13 +400,15 @@ def logs(
     scheduler: Annotated[
         SchedulerType, typer.Argument(help="Scheduler")
     ] = SchedulerType.local,
-    cluster: Annotated[Optional[str], typer.Option(help="Cluster name")] = None,
+    cluster: Annotated[str | None, typer.Option(help="Cluster name")] = None,
+    profile: Annotated[str | None, typer.Option(help="Profile name")] = None,
+    config: Annotated[str | None, typer.Option(help="Path to config.toml")] = None,
     stream: Annotated[
         str,
         typer.Option("--stream", help="Which stream to read: stdout, stderr, or both"),
     ] = "stdout",
     tail: Annotated[
-        Optional[int],
+        int | None,
         typer.Option("--tail", help="Show only the last N lines"),
     ] = None,
     follow: Annotated[
@@ -318,7 +424,7 @@ def logs(
         console.print("[red]--stream must be one of: stdout, stderr, both[/]")
         raise typer.Exit(1)
 
-    with _open_submitor(scheduler, cluster) as submitor:
+    with _open_submitor(scheduler, cluster, profile, config) as submitor:
         submitor.refresh()
         try:
             record = submitor.get(job_id)
@@ -357,13 +463,15 @@ def watch(
     scheduler: Annotated[
         SchedulerType, typer.Argument(help="Scheduler")
     ] = SchedulerType.local,
-    cluster: Annotated[Optional[str], typer.Option(help="Cluster name")] = None,
-    timeout: Annotated[Optional[float], typer.Option(help="Max seconds")] = None,
+    cluster: Annotated[str | None, typer.Option(help="Cluster name")] = None,
+    profile: Annotated[str | None, typer.Option(help="Profile name")] = None,
+    config: Annotated[str | None, typer.Option(help="Path to config.toml")] = None,
+    timeout: Annotated[float | None, typer.Option(help="Max seconds")] = None,
 ) -> None:
     """Watch a job until completion."""
     from molq import JobNotFoundError
 
-    with _open_submitor(scheduler, cluster) as submitor:
+    with _open_submitor(scheduler, cluster, profile, config) as submitor:
         try:
             record = submitor.get(job_id)
         except JobNotFoundError:
@@ -396,11 +504,13 @@ def history(
     scheduler: Annotated[
         SchedulerType, typer.Argument(help="Scheduler")
     ] = SchedulerType.local,
-    cluster: Annotated[Optional[str], typer.Option(help="Cluster name")] = None,
+    cluster: Annotated[str | None, typer.Option(help="Cluster name")] = None,
+    profile: Annotated[str | None, typer.Option(help="Profile name")] = None,
+    config: Annotated[str | None, typer.Option(help="Path to config.toml")] = None,
     all: Annotated[bool, typer.Option("--all", help="Include terminal jobs")] = False,
 ) -> None:
     """Show job history for a scheduler/cluster namespace."""
-    with _open_submitor(scheduler, cluster) as submitor:
+    with _open_submitor(scheduler, cluster, profile, config) as submitor:
         submitor.refresh()
         records = submitor.list(include_terminal=all)
 
@@ -410,6 +520,7 @@ def history(
 
     table = Table(title="History")
     table.add_column("Job ID", style="cyan", max_width=36)
+    table.add_column("Attempt")
     table.add_column("State", style="bold")
     table.add_column("Scheduler ID")
     table.add_column("Submitted")
@@ -420,12 +531,11 @@ def history(
     for record in records:
         style = _state_style(record.state.value)
         state_value = (
-            f"[{style}]{record.state.value}[/{style}]"
-            if style
-            else record.state.value
+            f"[{style}]{record.state.value}[/{style}]" if style else record.state.value
         )
         table.add_row(
             record.job_id[:12] + "...",
+            str(record.attempt),
             state_value,
             record.scheduler_job_id or "-",
             _format_timestamp(record.submitted_at),
@@ -448,16 +558,43 @@ def inspect(
     scheduler: Annotated[
         SchedulerType, typer.Argument(help="Scheduler")
     ] = SchedulerType.local,
-    cluster: Annotated[Optional[str], typer.Option(help="Cluster name")] = None,
+    cluster: Annotated[str | None, typer.Option(help="Cluster name")] = None,
+    profile: Annotated[str | None, typer.Option(help="Profile name")] = None,
+    config: Annotated[str | None, typer.Option(help="Path to config.toml")] = None,
 ) -> None:
     """Show canonical job metadata and transition timeline."""
     from molq import JobNotFoundError
 
-    with _open_submitor(scheduler, cluster) as submitor:
+    with _open_submitor(scheduler, cluster, profile, config) as submitor:
         submitor.refresh()
         try:
             record = submitor.get(job_id)
             transitions = submitor.get_transitions(job_id)
+            family = submitor.get_retry_family(job_id)
+            dependencies = submitor.get_dependencies(job_id)
+            dependents = submitor.get_dependents(job_id)
+            upstream_lines: list[str] = []
+            downstream_lines: list[str] = []
+            for dependency in dependencies:
+                dep_record = submitor.get(dependency.dependency_job_id)
+                relation_state = _dependency_relation_state(
+                    dependency.dependency_type, dep_record
+                )
+                upstream_lines.append(
+                    f"      {_dependency_marker(relation_state)} "
+                    f"{dependency.dependency_job_id}  {dependency.dependency_type}  "
+                    f"{dep_record.state.value}  scheduler={dependency.scheduler_dependency}"
+                )
+            for dependent in dependents:
+                dependent_record = submitor.get(dependent.job_id)
+                relation_state = _dependency_relation_state(
+                    dependent.dependency_type, record
+                )
+                downstream_lines.append(
+                    f"      {_dependency_marker(relation_state)} "
+                    f"{dependent.job_id}  {dependent.dependency_type}  "
+                    f"{dependent_record.state.value}"
+                )
         except JobNotFoundError:
             rprint(f"[yellow]Job {job_id} not found[/]")
             raise typer.Exit(1)
@@ -465,6 +602,9 @@ def inspect(
     rprint(f"Job {record.job_id}:")
     rprint(f"  Cluster:        {record.cluster_name}")
     rprint(f"  Scheduler:      {record.scheduler}")
+    rprint(f"  Root Job ID:    {record.root_job_id}")
+    rprint(f"  Attempt:        {record.attempt}")
+    rprint(f"  Previous:       {record.previous_attempt_job_id or '-'}")
     rprint(f"  Scheduler ID:   {record.scheduler_job_id or '-'}")
     rprint(f"  State:          [bold]{record.state.value}[/]")
     rprint(f"  Command:        {record.command_display}")
@@ -473,11 +613,36 @@ def inspect(
     rprint(f"  Submitted At:   {_format_timestamp(record.submitted_at)}")
     rprint(f"  Started At:     {_format_timestamp(record.started_at)}")
     rprint(f"  Finished At:    {_format_timestamp(record.finished_at)}")
-    rprint(f"  Exit Code:      {record.exit_code if record.exit_code is not None else '-'}")
+    rprint(
+        f"  Exit Code:      {record.exit_code if record.exit_code is not None else '-'}"
+    )
     rprint(f"  Failure:        {record.failure_reason or '-'}")
     rprint(f"  Job Dir:        {record.metadata.get('molq.job_dir', '-')}")
     rprint(f"  Stdout:         {record.metadata.get('molq.stdout_path', '-')}")
     rprint(f"  Stderr:         {record.metadata.get('molq.stderr_path', '-')}")
+    rprint(f"  Profile:        {record.profile_name or '-'}")
+
+    rprint("  Retry Family:")
+    for member in family:
+        rprint(
+            f"    attempt {member.attempt}: {member.job_id} "
+            f"[bold]{member.state.value}[/]"
+        )
+
+    rprint("  Dependencies:")
+    if dependencies:
+        rprint("    Upstream:")
+        for line in upstream_lines:
+            rprint(line)
+    else:
+        rprint("    Upstream: -")
+
+    if dependents:
+        rprint("    Downstream:")
+        for line in downstream_lines:
+            rprint(line)
+    else:
+        rprint("    Downstream: -")
 
     rprint("  Timeline:")
     for transition in transitions:
@@ -511,7 +676,7 @@ def monitor(
         typer.Option("--refresh", "-r", help="Refresh interval in seconds."),
     ] = 2.0,
     db: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--db", help="Path to molq SQLite database (default: ~/.molq/jobs.db)."
         ),
@@ -520,14 +685,14 @@ def monitor(
     """Open full-screen dashboard for all molq jobs across all clusters."""
     from molq.dashboard import MolqMonitor
 
-    rprint(f"[dim]Opening monitor… (press q to close)[/dim]")
+    rprint("[dim]Opening monitor… (press q to close)[/dim]")
     MolqMonitor(
         db_path=db,
         include_terminal=all_jobs,
         limit=limit,
         refresh_interval=refresh,
     ).watch()
-    rprint(f"\n[dim]Monitor closed.[/dim]")
+    rprint("\n[dim]Monitor closed.[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -541,12 +706,14 @@ def cancel(
     scheduler: Annotated[
         SchedulerType, typer.Argument(help="Scheduler")
     ] = SchedulerType.local,
-    cluster: Annotated[Optional[str], typer.Option(help="Cluster name")] = None,
+    cluster: Annotated[str | None, typer.Option(help="Cluster name")] = None,
+    profile: Annotated[str | None, typer.Option(help="Profile name")] = None,
+    config: Annotated[str | None, typer.Option(help="Path to config.toml")] = None,
 ) -> None:
     """Cancel a running job."""
     from molq import JobNotFoundError
 
-    with _open_submitor(scheduler, cluster) as submitor:
+    with _open_submitor(scheduler, cluster, profile, config) as submitor:
         try:
             submitor.cancel(job_id)
             rprint(f"[green]Job {job_id} cancelled[/]")
@@ -556,6 +723,53 @@ def cancel(
         except Exception as e:
             console.print(f"[red]Cancel failed: {e}[/]")
             raise typer.Exit(1)
+
+
+@app.command()
+def cleanup(
+    scheduler: Annotated[
+        SchedulerType, typer.Argument(help="Scheduler")
+    ] = SchedulerType.local,
+    cluster: Annotated[str | None, typer.Option(help="Cluster name")] = None,
+    profile: Annotated[str | None, typer.Option(help="Profile name")] = None,
+    config: Annotated[str | None, typer.Option(help="Path to config.toml")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Preview only")] = False,
+) -> None:
+    """Clean up old job artifacts and records."""
+    with _open_submitor(scheduler, cluster, profile, config) as submitor:
+        result = submitor.cleanup(dry_run=dry_run)
+    rprint(f"Job dirs: {len(result['job_dirs'])}")
+    rprint(f"Records:  {len(result['records'])}")
+    for path in result["job_dirs"]:
+        rprint(f"  dir: {path}")
+    for job_id in result["records"]:
+        rprint(f"  record: {job_id}")
+
+
+@app.command()
+def daemon(
+    scheduler: Annotated[
+        SchedulerType, typer.Argument(help="Scheduler")
+    ] = SchedulerType.local,
+    cluster: Annotated[str | None, typer.Option(help="Cluster name")] = None,
+    profile: Annotated[str | None, typer.Option(help="Profile name")] = None,
+    config: Annotated[str | None, typer.Option(help="Path to config.toml")] = None,
+    once: Annotated[
+        bool, typer.Option("--once", help="Run one cycle and exit")
+    ] = False,
+    interval: Annotated[
+        float, typer.Option("--interval", help="Polling interval in seconds")
+    ] = 5.0,
+    skip_cleanup: Annotated[
+        bool, typer.Option("--skip-cleanup", help="Skip retention cleanup")
+    ] = False,
+) -> None:
+    """Run the background reconciliation loop."""
+    with _open_submitor(scheduler, cluster, profile, config) as submitor:
+        try:
+            submitor.daemon(once=once, interval=interval, run_cleanup=not skip_cleanup)
+        except KeyboardInterrupt:
+            rprint("[dim]Daemon interrupted[/]")
 
 
 if __name__ == "__main__":

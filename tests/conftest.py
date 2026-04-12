@@ -2,11 +2,12 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+
 import pytest
 
+from molq.scheduler import SchedulerCapabilities
 from molq.store import JobStore
 from molq.testing import FakeScheduler, make_submitor
-from molq.scheduler import SchedulerCapabilities
 
 
 @pytest.fixture(scope="session", autouse=True)

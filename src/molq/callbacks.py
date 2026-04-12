@@ -6,17 +6,19 @@ but errors in handlers are isolated — a failing callback never breaks
 the monitoring loop.
 """
 
-import logging
 import threading
 from collections import defaultdict
 from collections.abc import Callable
-from enum import Enum
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
-logger = logging.getLogger(__name__)
+import mollog
+
+logger = mollog.get_logger(__name__)
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     """Job lifecycle event types."""
 
     STATUS_CHANGE = "status_change"
@@ -28,6 +30,17 @@ class EventType(str, Enum):
     JOB_TIMED_OUT = "job_timed_out"
     JOB_LOST = "job_lost"
     ALL_COMPLETED = "all_completed"
+
+
+@dataclass(frozen=True)
+class EventPayload:
+    """Lifecycle event payload."""
+
+    event: EventType
+    job_id: str | None = None
+    transition: Any = None
+    record: Any = None
+    data: Any = None
 
 
 class EventBus:

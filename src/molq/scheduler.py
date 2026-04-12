@@ -5,8 +5,6 @@ Internal module — users interact through Submitor, not directly with Scheduler
 
 from __future__ import annotations
 
-import getpass
-import logging
 import os
 import re
 import signal
@@ -18,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-logger = logging.getLogger(__name__)
+import mollog
 
 from molq.errors import SchedulerError
 from molq.models import JobSpec
@@ -31,6 +29,8 @@ from molq.options import (
 )
 from molq.status import JobState
 
+logger = mollog.get_logger(__name__)
+
 # ---------------------------------------------------------------------------
 # Protocol
 # ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ from molq.status import JobState
 class Scheduler(Protocol):
     """Internal protocol for scheduler backends."""
 
-    def capabilities(self) -> "SchedulerCapabilities":
+    def capabilities(self) -> SchedulerCapabilities:
         """Return the backend capability contract."""
         ...
 
@@ -55,7 +55,7 @@ class Scheduler(Protocol):
         """Cancel a job."""
         ...
 
-    def resolve_terminal(self, scheduler_job_id: str) -> "TerminalStatus | None":
+    def resolve_terminal(self, scheduler_job_id: str) -> TerminalStatus | None:
         """Determine terminal status for a disappeared job."""
         ...
 
@@ -238,7 +238,9 @@ class LocalScheduler:
                 code = int(exit_code_path.read_text().strip())
                 state = JobState.SUCCEEDED if code == 0 else JobState.FAILED
                 reason = None if code == 0 else f"process exited with code {code}"
-                return TerminalStatus(state=state, exit_code=code, failure_reason=reason)
+                return TerminalStatus(
+                    state=state, exit_code=code, failure_reason=reason
+                )
             except (ValueError, OSError):
                 pass
         return TerminalStatus(
@@ -300,6 +302,7 @@ class SlurmScheduler:
             supports_queue=True,
             supports_account=True,
             supports_dependency=True,
+            supports_node_count=True,
             supports_exclusive_node=True,
             supports_array_jobs=True,
             supports_qos=True,
@@ -450,6 +453,8 @@ class SlurmScheduler:
             if r.gpu_type:
                 gres = f"gpu:{r.gpu_type}:{r.gpu_count}"
             mapped["gres"] = gres
+        if s.node_count:
+            mapped["nodes"] = str(s.node_count)
         if s.exclusive_node:
             mapped["exclusive"] = ""
         if s.account:
@@ -464,6 +469,7 @@ class SlurmScheduler:
             mapped["reservation"] = s.reservation
 
         return mapped
+
 
 # ---------------------------------------------------------------------------
 # PBS Scheduler
@@ -501,6 +507,7 @@ class PBSScheduler:
             supports_queue=True,
             supports_account=True,
             supports_node_count=True,
+            supports_dependency=True,
         )
 
     def submit(self, spec: JobSpec, job_dir: Path) -> str:
@@ -525,8 +532,10 @@ class PBSScheduler:
         if not scheduler_job_ids:
             return {}
 
-        user = getpass.getuser()
-        cmd = [self._opts.qstat_path, "-u", user]
+        # Query specific job IDs directly — O(queried) not O(all user jobs).
+        # qstat exits non-zero for unknown/finished jobs; that's fine — those
+        # jobs will be resolved as terminal by the reconciler.
+        cmd = [self._opts.qstat_path] + list(scheduler_job_ids)
 
         try:
             proc = subprocess.run(
@@ -546,13 +555,13 @@ class PBSScheduler:
                     continue
                 jid = parts[0].split(".")[0]
                 if jid in wanted:
-                    st = parts[4] if len(parts) > 4 else ""
+                    st = parts[4]
                     state = _PBS_STATE_MAP.get(st)
                     if state is not None:
                         result[jid] = state
             return result
         except subprocess.TimeoutExpired:
-            logger.warning("qstat timed out (user=%s)", user)
+            logger.warning("qstat timed out for ids=%s", scheduler_job_ids)
             return {}
         except OSError as e:
             logger.error("qstat invocation failed: %s", e)
@@ -647,8 +656,11 @@ class PBSScheduler:
             mapped["-q"] = s.queue
         if s.account:
             mapped["-A"] = s.account
+        if s.dependency:
+            mapped["-W"] = f"depend={s.dependency}"
 
         return mapped
+
 
 # ---------------------------------------------------------------------------
 # LSF Scheduler
@@ -687,6 +699,7 @@ class LSFScheduler:
             supports_time_limit=True,
             supports_queue=True,
             supports_account=True,
+            supports_dependency=True,
         )
 
     def submit(self, spec: JobSpec, job_dir: Path) -> str:
@@ -829,8 +842,11 @@ class LSFScheduler:
             if r.gpu_type:
                 gpu_str += f":mode=exclusive_process:gmodel={r.gpu_type}"
             mapped["-gpu"] = gpu_str
+        if s.dependency:
+            mapped["-w"] = f'"{s.dependency}"'
 
         return mapped
+
 
 # ---------------------------------------------------------------------------
 # Factory

@@ -1,7 +1,5 @@
 """Tests for molq.reconciler — JobReconciler state sync."""
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from molq.models import Command, JobSpec
@@ -28,11 +26,6 @@ def store():
     s = JobStore(":memory:")
     yield s
     s.close()
-
-
-@pytest.fixture
-def mock_scheduler():
-    return MagicMock()
 
 
 class TestReconcile:

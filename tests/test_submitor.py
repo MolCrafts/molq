@@ -1,6 +1,5 @@
 """Tests for molq.submitor — Submitor and JobHandle."""
 
-from pathlib import Path
 import pytest
 
 from molq.errors import (
@@ -9,12 +8,19 @@ from molq.errors import (
     JobNotFoundError,
     ScriptError,
 )
-from molq.models import SubmitorDefaults
+from molq.models import RetryBackoff, RetryPolicy, SubmitorDefaults
 from molq.options import LocalSchedulerOptions, SlurmSchedulerOptions
 from molq.status import JobState
-from molq.store import JobStore
-from molq.submitor import JobHandle, Submitor
-from molq.types import JobExecution, JobResources, JobScheduling, Memory, Script
+from molq.submitor import Submitor
+from molq.testing import make_submitor
+from molq.types import (
+    DependencyRef,
+    JobExecution,
+    JobResources,
+    JobScheduling,
+    Memory,
+    Script,
+)
 
 
 @pytest.fixture
@@ -57,8 +63,12 @@ class TestSubmitorInit:
         assert s.cluster_name == "dev"
 
     def test_instances_independent(self, memory_store, mocker):
-        s1 = Submitor("dev1", "local", store=memory_store, _scheduler=mocker.MagicMock())
-        s2 = Submitor("dev2", "local", store=memory_store, _scheduler=mocker.MagicMock())
+        s1 = Submitor(
+            "dev1", "local", store=memory_store, _scheduler=mocker.MagicMock()
+        )
+        s2 = Submitor(
+            "dev2", "local", store=memory_store, _scheduler=mocker.MagicMock()
+        )
         assert s1.cluster_name != s2.cluster_name
 
 
@@ -113,7 +123,13 @@ class TestSubmit:
             resources=JobResources(cpu_count=4),
             scheduling=JobScheduling(queue="normal"),
         )
-        s = Submitor("dev", "local", defaults=defaults, store=memory_store, _scheduler=mock_scheduler)
+        s = Submitor(
+            "dev",
+            "local",
+            defaults=defaults,
+            store=memory_store,
+            _scheduler=mock_scheduler,
+        )
         handle = s.submit(argv=["echo"])
         record = s.get(handle.job_id)
         assert record is not None
@@ -166,6 +182,87 @@ class TestSubmit:
             ),
         )
         assert handle.status() == JobState.SUBMITTED
+
+    def test_submit_persists_dependencies(self, memory_store, mock_scheduler):
+        s = Submitor("dev", "slurm", store=memory_store, _scheduler=mock_scheduler)
+        parent = s.submit(argv=["echo", "parent"])
+        child = s.submit(
+            argv=["echo", "child"],
+            after_success=[parent.job_id],
+        )
+        dependencies = s.get_dependencies(child.job_id)
+        assert len(dependencies) == 1
+        assert dependencies[0].dependency_job_id == parent.job_id
+        submitted_spec = mock_scheduler.submit.call_args_list[-1].args[0]
+        assert submitted_spec.scheduling.dependency.startswith("afterok:")
+
+    def test_submit_accepts_dependency_refs(self, memory_store, mock_scheduler):
+        s = Submitor("dev", "slurm", store=memory_store, _scheduler=mock_scheduler)
+        parent = s.submit(argv=["echo", "parent"])
+        child = s.submit(
+            argv=["echo", "child"],
+            scheduling=JobScheduling(
+                dependencies=(DependencyRef(parent.job_id, "after_success"),)
+            ),
+        )
+        dependencies = s.get_dependencies(child.job_id)
+        assert len(dependencies) == 1
+        assert dependencies[0].dependency_type == "after_success"
+        submitted_spec = mock_scheduler.submit.call_args_list[-1].args[0]
+        assert submitted_spec.scheduling.dependency.startswith("afterok:")
+
+    def test_submit_after_failure_compiles_afternotok(
+        self, memory_store, mock_scheduler
+    ):
+        s = Submitor("dev", "slurm", store=memory_store, _scheduler=mock_scheduler)
+        parent = s.submit(argv=["echo", "parent"])
+        child = s.submit(
+            argv=["echo", "child"],
+            after_failure=[parent.job_id],
+        )
+        dependencies = s.get_dependencies(child.job_id)
+        assert len(dependencies) == 1
+        assert dependencies[0].dependency_type == "after_failure"
+        assert dependencies[0].scheduler_dependency.startswith("afternotok:")
+        submitted_spec = mock_scheduler.submit.call_args_list[-1].args[0]
+        assert submitted_spec.scheduling.dependency.startswith("afternotok:")
+
+    def test_submit_rejects_mixed_raw_and_logical_dependencies(
+        self, memory_store, mock_scheduler
+    ):
+        s = Submitor("dev", "slurm", store=memory_store, _scheduler=mock_scheduler)
+        parent = s.submit(argv=["echo", "parent"])
+
+        # Mutual exclusion is enforced at JobScheduling construction time.
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            s.submit(
+                argv=["echo", "child"],
+                scheduling=JobScheduling(
+                    dependency="afterok:manual",
+                    dependencies=(DependencyRef(parent.job_id, "after_success"),),
+                ),
+            )
+
+    def test_retry_policy_creates_new_attempt(self):
+        with make_submitor(
+            "retry",
+            outcomes=["failed", "succeeded"],
+            job_duration=0.0,
+        ) as s:
+            handle = s.submit(
+                argv=["echo", "hello"],
+                retry=RetryPolicy(
+                    max_attempts=2,
+                    backoff=RetryBackoff(initial_seconds=0.0, maximum_seconds=0.0),
+                ),
+            )
+            record = handle.wait(timeout=1.0)
+            family = s.get_retry_family(handle.job_id)
+            assert record.state == JobState.SUCCEEDED
+            assert len(family) == 2
+            assert family[0].attempt == 1
+            assert family[1].attempt == 2
+            assert family[1].previous_attempt_job_id == family[0].job_id
 
 
 # ---------------------------------------------------------------------------

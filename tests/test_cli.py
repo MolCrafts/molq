@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from molq.cli.main import app
-from molq.models import JobRecord, StatusTransition
+from molq.models import JobDependency, JobRecord, StatusTransition
 from molq.status import JobState
 
 runner = CliRunner()
@@ -229,11 +229,25 @@ class TestHistoryAndInspect:
         mock_submitor = MagicMock()
         mock_submitor.get.return_value = record
         mock_submitor.get_transitions.return_value = transitions
+        mock_submitor.get_retry_family.return_value = [record]
+        mock_submitor.get_dependencies.return_value = [
+            JobDependency(
+                job_id="abc-123",
+                dependency_job_id="dep-1",
+                dependency_type="after_success",
+                scheduler_dependency="afterok:999",
+            )
+        ]
+        mock_submitor.get_dependents.return_value = []
         mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["inspect", "abc-123", "local"])
         assert result.exit_code == 0
         assert "Scheduler ID:   12345" in result.output
+        assert "Retry Family:" in result.output
+        assert "Dependencies:" in result.output
+        assert "Upstream:" in result.output
+        assert "Downstream:" in result.output
         assert "Timeline:" in result.output
         assert "created" in result.output
 
@@ -258,3 +272,28 @@ class TestCancelCommand:
 
         result = runner.invoke(app, ["cancel", "abc", "local"])
         assert result.exit_code == 1
+
+
+class TestMaintenanceCommands:
+    @patch("molq.cli.main._open_submitor")
+    def test_cleanup(self, mock_create):
+        mock_submitor = MagicMock()
+        mock_submitor.cleanup.return_value = {
+            "job_dirs": ["/tmp/jobs/a"],
+            "records": ["job-1"],
+        }
+        mock_create.return_value.__enter__.return_value = mock_submitor
+
+        result = runner.invoke(app, ["cleanup", "local", "--dry-run"])
+        assert result.exit_code == 0
+        assert "Job dirs: 1" in result.output
+        assert "record: job-1" in result.output
+
+    @patch("molq.cli.main._open_submitor")
+    def test_daemon_once(self, mock_create):
+        mock_submitor = MagicMock()
+        mock_create.return_value.__enter__.return_value = mock_submitor
+
+        result = runner.invoke(app, ["daemon", "local", "--once"])
+        assert result.exit_code == 0
+        mock_submitor.daemon.assert_called_once()

@@ -20,6 +20,7 @@ Usage::
 
 from __future__ import annotations
 
+import os
 import select
 import sys
 import termios
@@ -61,7 +62,21 @@ class JobRow:
     scheduler_id: str | None = None
     elapsed: str | None = None
     message: str | None = None
+    dependency_summary: str | None = None
+    upstream: tuple[DependencyLine, ...] = ()
+    downstream: tuple[DependencyLine, ...] = ()
     extras: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class DependencyLine:
+    """Single dependency relation rendered in the detail view."""
+
+    marker: str
+    job_id: str
+    dependency_type: str
+    job_state: str
+    scheduler_dependency: str | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +107,8 @@ _STATE_STYLE: dict[str, str] = {
     "timed_out": "bold red",
     "lost": "bold red",
     "mixed": "bold yellow",
+    "blocked": "yellow",
+    "skipped": "dim",
 }
 
 _STATUS_ICON: dict[str, str] = {
@@ -208,27 +225,27 @@ class RunDashboard:
                 saved = termios.tcgetattr(fd)
                 tty.setcbreak(fd)
                 while not stop.is_set():
-                    ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+                    ready, _, _ = select.select([fd], [], [], 0.1)
                     if not ready:
                         continue
-                    ch = sys.stdin.read(1)
+                    ch = os.read(fd, 1).decode("utf-8", errors="replace")
 
                     if ch in ("q", "Q", "\x03"):  # quit
                         stop.set()
                         break
 
                     elif ch == "\x1b":  # escape sequence or bare Esc
-                        r2, _, _ = select.select([sys.stdin], [], [], 0.05)
+                        r2, _, _ = select.select([fd], [], [], 0.05)
                         if not r2:
                             ui.exit_detail()  # bare Esc → back to list
                             continue
-                        ch2 = sys.stdin.read(1)
+                        ch2 = os.read(fd, 1).decode("utf-8", errors="replace")
                         if ch2 != "[":
                             continue
-                        r3, _, _ = select.select([sys.stdin], [], [], 0.05)
+                        r3, _, _ = select.select([fd], [], [], 0.05)
                         if not r3:
                             continue
-                        ch3 = sys.stdin.read(1)
+                        ch3 = os.read(fd, 1).decode("utf-8", errors="replace")
                         if ch3 == "A":  # ↑
                             ui.move_up()
                         elif ch3 == "B":  # ↓
@@ -356,6 +373,7 @@ class RunDashboard:
         table.add_column("CLUSTER", ratio=2, no_wrap=True, justify="left")
         table.add_column("SCHED ID", ratio=2, no_wrap=True, justify="left")
         table.add_column("ELAPSED", width=10, no_wrap=True, justify="left")
+        table.add_column("DEPS", width=10, no_wrap=True, justify="left")
         table.add_column("NOTE", ratio=3, justify="left")
 
         for i, job in enumerate(state.jobs):
@@ -370,6 +388,7 @@ class RunDashboard:
                 Text(job.cluster or "—", style="dim"),
                 Text(job.scheduler_id or "—", style="dim"),
                 Text(job.elapsed or "—", style="dim"),
+                Text(job.dependency_summary or "—", style="dim"),
                 Text(job.message or "", style="dim"),
                 style=row_style,
             )
@@ -378,7 +397,7 @@ class RunDashboard:
             table.add_row(
                 Text("—", style="dim"),
                 Text("no jobs", style="dim"),
-                *[Text("", style="dim")] * 4,
+                *[Text("", style="dim")] * 5,
             )
 
         return Panel(table, title="[bold]Jobs[/bold]", padding=(0, 1))
@@ -403,8 +422,30 @@ class RunDashboard:
             _kv("elapsed", job.elapsed)
         if job.message:
             _kv("note", job.message, "bold red")
+        if job.dependency_summary:
+            _kv("deps", job.dependency_summary, "dim")
         for key, val in job.extras:
             _kv(key, val)
+
+        if job.upstream:
+            grid.add_row("", Text(""))
+            grid.add_row("upstream", Text(""))
+            for dep in job.upstream:
+                line = (
+                    f"{dep.marker} {dep.job_id}  {dep.dependency_type}  {dep.job_state}"
+                )
+                if dep.scheduler_dependency:
+                    line += f"  {dep.scheduler_dependency}"
+                grid.add_row("", Text(line, style=_dependency_line_style(dep.marker)))
+
+        if job.downstream:
+            grid.add_row("", Text(""))
+            grid.add_row("downstream", Text(""))
+            for dep in job.downstream:
+                line = (
+                    f"{dep.marker} {dep.job_id}  {dep.dependency_type}  {dep.job_state}"
+                )
+                grid.add_row("", Text(line, style=_dependency_line_style(dep.marker)))
 
         return Panel(
             grid,
@@ -453,6 +494,38 @@ def _molq_overall_status(running: int, pending: int, failed: int, done: int) -> 
     if failed > 0:
         return "mixed"
     return "done"
+
+
+def _dependency_summary(preview: object | None) -> str | None:
+    if preview is None:
+        return None
+    upstream_total = getattr(preview, "upstream_total", 0)
+    upstream_satisfied = getattr(preview, "upstream_satisfied", 0)
+    downstream_total = getattr(preview, "downstream_total", 0)
+
+    if upstream_total and downstream_total:
+        return f"{upstream_satisfied}/{upstream_total} +{downstream_total}"
+    if upstream_total:
+        return f"{upstream_satisfied}/{upstream_total} ok"
+    if downstream_total:
+        return f"-> {downstream_total}"
+    return None
+
+
+def _dependency_marker(relation_state: str) -> str:
+    return {
+        "satisfied": "✓",
+        "pending": "·",
+        "impossible": "!",
+    }.get(relation_state, "·")
+
+
+def _dependency_line_style(marker: str) -> str:
+    return {
+        "✓": "green",
+        "·": "yellow",
+        "!": "red",
+    }.get(marker, "white")
 
 
 # ── MolqMonitor ───────────────────────────────────────────────────────────────
@@ -515,11 +588,13 @@ class MolqMonitor:
                 include_terminal=self._include_terminal,
                 limit=self._limit,
             )
+            previews = store.get_dependency_previews([rec.job_id for rec in records])
             rows: list[JobRow] = []
             running = pending = done = failed = 0
 
             for rec in records:
                 elapsed = _elapsed_ts(rec.submitted_at, rec.finished_at)
+                preview = previews.get(rec.job_id)
 
                 # Build extras for the detail view
                 extras: list[tuple[str, str]] = [
@@ -542,6 +617,30 @@ class MolqMonitor:
                         scheduler_id=rec.scheduler_job_id,
                         elapsed=elapsed,
                         message=rec.failure_reason,
+                        dependency_summary=_dependency_summary(preview),
+                        upstream=tuple(
+                            DependencyLine(
+                                marker=_dependency_marker(item.relation_state),
+                                job_id=item.job_id,
+                                dependency_type=item.dependency_type,
+                                job_state=item.job_state.value,
+                                scheduler_dependency=item.scheduler_dependency,
+                            )
+                            for item in (
+                                preview.upstream if preview is not None else ()
+                            )
+                        ),
+                        downstream=tuple(
+                            DependencyLine(
+                                marker=_dependency_marker(item.relation_state),
+                                job_id=item.job_id,
+                                dependency_type=item.dependency_type,
+                                job_state=item.job_state.value,
+                            )
+                            for item in (
+                                preview.downstream if preview is not None else ()
+                            )
+                        ),
                         extras=tuple(extras),
                     )
                 )

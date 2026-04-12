@@ -6,8 +6,9 @@ Internal module — users interact through Submitor and JobHandle.
 
 from __future__ import annotations
 
-import logging
 import threading
+
+import mollog
 
 from molq.errors import MolqTimeoutError
 from molq.models import JobRecord
@@ -16,7 +17,7 @@ from molq.status import JobState
 from molq.store import JobStore
 from molq.strategies import ExponentialBackoffStrategy, PollingStrategy
 
-logger = logging.getLogger(__name__)
+logger = mollog.get_logger(__name__)
 
 
 class JobMonitor:
@@ -54,11 +55,19 @@ class JobMonitor:
 
         try:
             while True:
-                state = self._reconciler.reconcile_one(job_id)
+                latest = self._store.get_latest_attempt_record(job_id)
+                watched_job_id = latest.job_id if latest is not None else job_id
+                state = self._reconciler.reconcile_one(watched_job_id)
 
                 if state is not None and JobState(state).is_terminal:
-                    record = self._store.get_record(job_id)
+                    record = self._store.get_latest_attempt_record(job_id)
                     if record is not None:
+                        if not record.state.is_terminal:
+                            poll_count += 1
+                            continue
+                        if record.job_id != watched_job_id:
+                            poll_count += 1
+                            continue
                         return record
 
                 if timeout is not None and (time.time() - start) > timeout:
@@ -108,7 +117,9 @@ class JobMonitor:
                 self._reconciler.reconcile()
 
                 if job_ids is not None:
-                    records = [self._store.get_record(jid) for jid in job_ids]
+                    records = [
+                        self._store.get_latest_attempt_record(jid) for jid in job_ids
+                    ]
                     records = [r for r in records if r is not None]
                     all_terminal = all(r.state.is_terminal for r in records)
                 else:
