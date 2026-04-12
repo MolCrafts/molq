@@ -1,31 +1,36 @@
-name: release
+name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
-  pypi-publish:
-    name: upload release to PyPI
+  publish-pypi:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    # Specifying a GitHub environment is optional, but strongly encouraged
-    environment: pypi
-    permissions:
-      # IMPORTANT: this permission is mandatory for Trusted Publishing
-      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/p/molcrafts-molq
+
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - uses: actions/checkout@v3
-
-      - uses: actions/setup-python@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: "3.12"
 
-      - name: install build tool
+      - name: Build artifacts
         run: python -m pip install --upgrade build
+      - run: python -m build
 
-      - name: build distributions
-        run: python -m build
-
-      - name: Publish package distributions to PyPI
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

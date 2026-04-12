@@ -1,0 +1,37 @@
+[project]
+site_name = "molcrafts-molq"
+site_url = "https://github.com/MolCrafts/molq/tree/master/docs"
+site_description = "Unified job queue for local execution and HPC schedulers."
+site_author = "Roy Kid"
+copyright = "&copy; 2026 Roy Kid"
+docs_dir = "docs"
+site_dir = "site"
+repo_url = "https://github.com/MolCrafts/molq"
+repo_name = "MolCrafts/molq"
+edit_uri = "edit/master/docs/"
+nav = [
+  {"Overview" = "index.md"},
+  {"Guide" = [
+    "getting-started.md",
+    "schedulers.md",
+    "monitoring.md",
+    "cli.md"
+  ]},
+  {"Reference" = [
+    "api.md",
+    "release-notes.md"
+  ]}
+]
+
+[project.theme]
+features = [
+  "navigation.instant",
+  "navigation.instant.progress",
+  "content.action.edit",
+  "content.action.view",
+]
+
+[project.theme.icon]
+repo = "fontawesome/brands/github"
+edit = "material/pencil"
+view = "material/eye"

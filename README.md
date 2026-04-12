@@ -1,140 +1,109 @@
-# Molq: Molcrafts Queue Interface
+# molq
 
-[![Tests](https://github.com/molcrafts/molq/workflows/Tests/badge.svg)](https://github.com/molcrafts/molq/actions)
-[![PyPI version](https://badge.fury.io/py/molq.svg)](https://badge.fury.io/py/molq)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/MolCrafts/molq/actions/workflows/ci.yml/badge.svg)](https://github.com/MolCrafts/molq/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/molcrafts-molq.svg)](https://pypi.org/project/molcrafts-molq/)
+[![Python](https://img.shields.io/badge/python-3.12%2B-3776AB.svg?logo=python&logoColor=white)](./pyproject.toml)
+[![License](https://img.shields.io/badge/license-MIT-16A34A.svg)](./LICENSE)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://github.com/pre-commit/pre-commit)
 
-**Molq** is a unified and flexible job queue system designed for both local execution and cluster computing environments. It provides a clean, decorator-based API that makes it easy to submit, monitor, and manage computational tasks across different execution backends.
+Unified job queue for Python workloads that need the same submission API on a laptop, workstation, or HPC cluster.
 
-## ✨ Key Features
-
-- **🎯 Unified Interface**: Single API for local and cluster execution
-- **🐍 Decorator-Based**: Simple, Pythonic syntax using decorators
-- **⚡ Generator Support**: Advanced control flow with generator-based tasks
-- **🔌 Multiple Backends**: Support for local execution, SLURM clusters, and more
-- **📊 Job Monitoring**: Built-in status tracking and error handling
-- **💾 Resource Management**: Flexible resource allocation and cleanup
-- **🔄 Job Dependencies**: Chain jobs and manage complex workflows
-- **📧 Notifications**: Email alerts for job status changes
-
-## 🚀 Quick Start
-
-### Installation
+## Quick Start
 
 ```bash
-pip install molq
+pip install molcrafts-molq
 ```
-
-### Basic Usage
 
 ```python
-from molq import submit
+from molq import Duration, JobResources, Memory, Submitor
 
-# Create submitters for different environments
-local = submit('dev', 'local')           # Local execution
-cluster = submit('hpc', 'slurm')         # SLURM cluster
+local = Submitor("devbox", "local")
 
-@local
-def hello_world(name: str):
-    """A simple local job."""
-    job_id = yield {
-        'cmd': ['echo', f'Hello, {name}!'],
-        'job_name': 'greeting'
-    }
-    return job_id
+job = local.submit(
+    argv=["python", "train.py"],
+    resources=JobResources(
+        cpu_count=4,
+        memory=Memory.gb(8),
+        time_limit=Duration.hours(2),
+    ),
+)
 
-@cluster
-def train_model():
-    """A GPU training job on the cluster."""
-    job_id = yield {
-        'cmd': ['python', 'train.py'],
-        'cpus': 16,
-        'memory': '64GB',
-        'time': '08:00:00',
-        'gpus': 2,
-        'partition': 'gpu'
-    }
-    return job_id
-
-# Run jobs
-hello_world("Molq")
-job_id = train_model()
+record = job.wait()
+assert record.state.value == "succeeded"
 ```
 
-### Command Line Integration
+## Features
+
+- One `Submitor` API for `local`, `slurm`, `pbs`, and `lsf`
+- Typed submission inputs with `Memory`, `Duration`, `Script`, `JobResources`, `JobScheduling`, and `JobExecution`
+- SQLite-backed persistence with WAL mode and UUID job identities
+- Reconciliation and blocking waits through `JobReconciler` and `JobMonitor`
+- First-class retry lineage with persisted attempt history
+- Molq job-id dependencies and inspectable dependency metadata
+- Profiles from `~/.molq/config.toml` plus reusable defaults
+- Cleanup and lightweight daemon workflows for retention and reconciliation
+- Event hooks through `EventBus`
+- Rich CLI for `submit`, `list`, `status`, `watch`, `logs`, `history`, `inspect`, `cleanup`, `daemon`, `monitor`, and `cancel`
+- Default stdout/stderr capture for every submitted job
+
+## Retry and Dependency Example
 
 ```python
-from molq import cmdline
+from molq import RetryBackoff, RetryPolicy, Submitor
 
-@cmdline
-def get_system_info():
-    """Execute command and capture output."""
-    result = yield {'cmd': ['uname', '-a']}
-    return result.stdout.decode().strip()
+slurm = Submitor("hpc", "slurm")
 
-system_info = get_system_info()
-print(system_info)
+train = slurm.submit(
+    argv=["python", "train.py"],
+    retry=RetryPolicy(
+        max_attempts=3,
+        backoff=RetryBackoff(initial_seconds=10, maximum_seconds=60),
+    ),
+)
+
+eval_job = slurm.submit(
+    argv=["python", "eval.py"],
+    after_success=[train.job_id],
+)
 ```
 
-## 📖 Documentation
+## Profile Example
 
-- **[Tutorial](https://molcrafts.github.io/molq/tutorial/getting-started/)** - Step-by-step guide
-- **[API Reference](https://molcrafts.github.io/molq/api/)** - Complete API documentation
-- **[Recipes](https://molcrafts.github.io/molq/recipes/machine-learning/)** - Real-world examples
-- **[Examples](examples/)** - Practical code examples
+`~/.molq/config.toml`
 
-## 🎯 Supported Backends
+```toml
+[profiles.gpu]
+scheduler = "slurm"
+cluster_name = "hpc"
 
-| Backend | Description | Status |
-|---------|-------------|---------|
-| **Local** | Local machine execution | ✅ Full support |
-| **SLURM** | HPC cluster scheduler | ✅ Full support |
-| **PBS/Torque** | Legacy cluster scheduler | 🚧 Basic support |
-| **LSF** | IBM cluster scheduler | 🚧 Basic support |
+[profiles.gpu.defaults.resources]
+cpu_count = 8
+memory = "34359738368"
 
-## 🔧 Advanced Features
+[profiles.gpu.defaults.scheduling]
+queue = "gpu"
 
-### Multi-Step Workflows
-```python
-@cluster
-def analysis_pipeline():
-    # Step 1: Preprocessing
-    prep_job = yield {
-        'cmd': ['python', 'preprocess.py'],
-        'cpus': 8, 'memory': '32GB', 'time': '02:00:00'
-    }
-
-    # Step 2: Analysis (depends on preprocessing)
-    analysis_job = yield {
-        'cmd': ['python', 'analyze.py'],
-        'cpus': 16, 'memory': '64GB', 'time': '08:00:00',
-        'dependency': prep_job  # Wait for preprocessing
-    }
-
-    return [prep_job, analysis_job]
+[profiles.gpu.retry]
+max_attempts = 3
 ```
 
-### Error Handling
-```python
-@cluster
-def robust_job():
-    try:
-        return yield {'cmd': ['python', 'risky_script.py']}
-    except Exception:
-        # Fallback to safer approach
-        return yield {'cmd': ['python', 'safe_script.py']}
+CLI usage:
+
+```bash
+molq submit slurm --profile gpu python train.py
+molq daemon slurm --profile gpu --once
+molq cleanup slurm --profile gpu --dry-run
 ```
 
-## 🤝 Contributing
+## Documentation
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+- [Getting Started](docs/getting-started.md) for installation and first-job examples
+- [Scheduler Guide](docs/schedulers.md) for backend capabilities and scheduler options
+- [Monitoring Guide](docs/monitoring.md) for lifecycle, polling, and dashboards
+- [API Reference](docs/api.md) for the exported classes and functions
+- [CLI Reference](docs/cli.md) for command-line usage
 
-## 📝 License
+---
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- Inspired by [Hamilton](https://hamilton.dagworks.io) for dataflow patterns
-- Built for the scientific computing and HPC community
+Built by [MolCrafts](https://github.com/MolCrafts) with love.
