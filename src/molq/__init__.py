@@ -15,6 +15,9 @@ Usage::
     print(record.state)
 """
 
+from molq.callbacks import EventBus, EventPayload, EventType
+from molq.config import MolqConfig, MolqProfile, load_config, load_profile
+from molq.dashboard import DashboardState, JobRow, MolqMonitor, RunDashboard
 from molq.errors import (
     CommandError,
     ConfigError,
@@ -26,16 +29,30 @@ from molq.errors import (
     StoreError,
     SubmitError,
 )
-from molq.models import JobRecord, SubmitorDefaults
+from molq.models import (
+    DependencyPreview,
+    DependencyPreviewItem,
+    JobDependency,
+    JobRecord,
+    RetentionPolicy,
+    RetryBackoff,
+    RetryPolicy,
+    StatusTransition,
+    SubmitorDefaults,
+)
 from molq.options import (
     LocalSchedulerOptions,
     LSFSchedulerOptions,
     PBSSchedulerOptions,
     SlurmSchedulerOptions,
 )
+from molq.scheduler import SchedulerCapabilities
 from molq.status import JobState
+from molq.store import dependency_relation_state
 from molq.submitor import JobHandle, Submitor
 from molq.types import (
+    DependencyCondition,
+    DependencyRef,
     Duration,
     JobExecution,
     JobResources,
@@ -45,6 +62,14 @@ from molq.types import (
 )
 
 __all__ = [
+    # Dashboard
+    "RunDashboard",
+    "MolqMonitor",
+    "DashboardState",
+    "JobRow",
+    "EventBus",
+    "EventPayload",
+    "EventType",
     # Core
     "Submitor",
     "JobHandle",
@@ -52,13 +77,30 @@ __all__ = [
     "Memory",
     "Duration",
     "Script",
+    "DependencyCondition",
+    "DependencyRef",
     "JobResources",
     "JobScheduling",
     "JobExecution",
+    # Dependency helpers
+    "dependency_relation_state",
     # Models
     "SubmitorDefaults",
     "JobRecord",
+    "JobDependency",
+    "DependencyPreview",
+    "DependencyPreviewItem",
+    "StatusTransition",
+    "RetryBackoff",
+    "RetryPolicy",
+    "RetentionPolicy",
     "JobState",
+    "SchedulerCapabilities",
+    # Config
+    "MolqConfig",
+    "MolqProfile",
+    "load_config",
+    "load_profile",
     # Options
     "LocalSchedulerOptions",
     "SlurmSchedulerOptions",

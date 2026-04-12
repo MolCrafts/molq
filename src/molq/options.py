@@ -6,15 +6,11 @@ Each scheduler defines its own frozen dataclass. No dict[str, Any] allowed.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 
 @dataclass(frozen=True)
 class LocalSchedulerOptions:
     """Options for local (subprocess) scheduler."""
-
-    runner_shim: str | Path = "molq-runner"
-    max_concurrent: int | None = None
 
 
 @dataclass(frozen=True)

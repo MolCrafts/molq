@@ -3,33 +3,24 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.0.1] - 2025-06-24
+## [Unreleased]
 
 ### Added
-- Initial release of Molq
-- Support for local job execution
-- Support for SLURM cluster job submission
-- Decorator-based API with `@submit` and `@cmdline`
-- Generator-based job control flow
-- Unified resource specification system
-- Support for job dependencies and monitoring
-- CLI interface for job management
-- Comprehensive documentation and examples
+- Release engineering files aligned with the `molcfg` repository structure.
+- GitHub issue templates, pull request template, and `CODEOWNERS`.
+- A rebuilt docs set covering getting started, schedulers, monitoring, API, CLI, and release notes.
 
-### Features
-- **Job Submitters**: Local and SLURM backends
-- **Resource Management**: CPU, memory, GPU, and time specifications
-- **Job Arrays**: Support for parameter sweep jobs
-- **Priority Control**: Job priority and QoS settings
-- **Email Notifications**: Job status notifications
-- **Job Dependencies**: Wait for job completion before starting
-- **Error Handling**: Robust error handling and retry mechanisms
-- **Documentation**: Complete user guide and API reference
+### Changed
+- Rewrote `README.md` to match the current public API and CLI surface.
+- Replaced legacy GitHub Actions workflows with a dedicated `CI` workflow and a tag-driven `Release` workflow.
+- Tightened packaging metadata in `pyproject.toml` and added a typed-package marker.
 
-### Supported Schedulers
-- Local execution (for development and testing)
-- SLURM (for HPC clusters)
-- PBS/Torque (basic support)
-- LSF (basic support)
+## [0.1.0] - 2025-06-24
+
+### Added
+- Initial beta release of `molq`.
+- Local, SLURM, PBS, and LSF scheduler backends behind a unified `Submitor` API.
+- Typed job submission models including `Memory`, `Duration`, `Script`, `JobResources`, `JobScheduling`, and `JobExecution`.
+- SQLite-backed job store with reconciliation, monitoring, and CLI support.

@@ -8,17 +8,9 @@ from pathlib import Path
 import pytest
 
 from molq.errors import StoreError
-from molq.models import Command, JobRecord, JobSpec
+from molq.models import Command, JobDependency, JobSpec
 from molq.status import JobState
 from molq.store import JobStore
-from molq.types import JobResources, Memory, Script
-
-
-@pytest.fixture
-def memory_store():
-    store = JobStore(":memory:")
-    yield store
-    store.close()
 
 
 @pytest.fixture
@@ -45,13 +37,14 @@ class TestSchemaCreation:
         names = {r["name"] for r in rows}
         assert "molq_meta" in names
         assert "jobs" in names
+        assert "job_dependencies" in names
         assert "status_transitions" in names
 
     def test_schema_version(self, memory_store: JobStore):
         row = memory_store._conn.execute(
             "SELECT value FROM molq_meta WHERE key = 'schema_version'"
         ).fetchone()
-        assert row["value"] == "2"
+        assert row["value"] == "7"
 
     def test_file_backed(self, file_store: JobStore):
         assert isinstance(file_store.db_path, Path)
@@ -148,6 +141,21 @@ class TestRecordTransition:
         assert rows[1]["new_state"] == "submitted"
         assert rows[1]["reason"] == "submitted to scheduler"
 
+    def test_get_transitions(self, memory_store: JobStore):
+        memory_store.insert_job(_make_spec())
+        memory_store.record_transition(
+            "test-id",
+            old_state=JobState.CREATED,
+            new_state=JobState.SUBMITTED,
+            timestamp=time.time() + 1,
+            reason="submitted to scheduler",
+        )
+
+        transitions = memory_store.get_transitions("test-id")
+        assert len(transitions) == 2
+        assert transitions[0].new_state == JobState.CREATED
+        assert transitions[1].new_state == JobState.SUBMITTED
+
 
 class TestListRecords:
     def test_list_active_only(self, memory_store: JobStore):
@@ -184,6 +192,51 @@ class TestListRecords:
         active = memory_store.get_active_records("dev")
         assert len(active) == 1
         assert active[0].job_id == "j1"
+
+
+class TestDependencies:
+    def test_get_dependents(self, memory_store: JobStore):
+        memory_store.insert_job(_make_spec("parent"))
+        memory_store.insert_job(_make_spec("child"))
+        memory_store.add_dependencies(
+            "child",
+            [
+                JobDependency(
+                    job_id="child",
+                    dependency_job_id="parent",
+                    dependency_type="after_success",
+                    scheduler_dependency="afterok:123",
+                )
+            ],
+        )
+
+        dependents = memory_store.get_dependents("parent")
+        assert len(dependents) == 1
+        assert dependents[0].job_id == "child"
+
+    def test_get_dependency_previews(self, memory_store: JobStore):
+        memory_store.insert_job(_make_spec("parent"))
+        memory_store.insert_job(_make_spec("child"))
+        memory_store.update_job("parent", state=JobState.SUCCEEDED, started_at=10.0)
+        memory_store.add_dependencies(
+            "child",
+            [
+                JobDependency(
+                    job_id="child",
+                    dependency_job_id="parent",
+                    dependency_type="after_success",
+                    scheduler_dependency="afterok:123",
+                )
+            ],
+        )
+
+        previews = memory_store.get_dependency_previews(["parent", "child"])
+
+        assert previews["child"].upstream_total == 1
+        assert previews["child"].upstream_satisfied == 1
+        assert previews["child"].upstream[0].relation_state == "satisfied"
+        assert previews["parent"].downstream_total == 1
+        assert previews["parent"].downstream[0].job_id == "child"
 
 
 class TestMigration:

@@ -2,7 +2,7 @@
 
 from molq.merge import merge_defaults
 from molq.models import SubmitorDefaults
-from molq.types import Duration, JobExecution, JobResources, JobScheduling, Memory
+from molq.types import JobExecution, JobResources, JobScheduling, Memory
 
 
 class TestMergeDefaults:

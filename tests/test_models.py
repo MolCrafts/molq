@@ -7,7 +7,7 @@ import pytest
 from molq.errors import CommandError
 from molq.models import Command, JobRecord, JobSpec, SubmitorDefaults
 from molq.status import JobState
-from molq.types import JobExecution, JobResources, JobScheduling, Memory, Script
+from molq.types import JobResources, JobScheduling, Memory, Script
 
 
 class TestCommand:

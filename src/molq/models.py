@@ -1,6 +1,7 @@
 """Data models for molq.
 
-Public: JobRecord, SubmitorDefaults
+Public: JobRecord, StatusTransition, SubmitorDefaults, RetryPolicy,
+RetentionPolicy, JobDependency, DependencyPreview
 Internal: Command, JobSpec
 """
 
@@ -9,6 +10,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from molq.errors import CommandError
 from molq.status import JobState
@@ -84,6 +86,69 @@ class Command:
 
 
 @dataclass(frozen=True)
+class RetryBackoff:
+    """Retry delay policy."""
+
+    mode: Literal["fixed", "exponential"] = "exponential"
+    initial_seconds: float = 5.0
+    maximum_seconds: float = 300.0
+    factor: float = 2.0
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """Retry policy applied by molq after terminal failures."""
+
+    max_attempts: int = 1
+    retry_on_states: tuple[JobState, ...] = (JobState.FAILED, JobState.TIMED_OUT)
+    retry_on_exit_codes: tuple[int, ...] | None = None
+    backoff: RetryBackoff = field(default_factory=RetryBackoff)
+
+
+@dataclass(frozen=True)
+class RetentionPolicy:
+    """Retention policy for job artifacts and terminal records."""
+
+    keep_job_dirs_for_days: int = 30
+    keep_terminal_records_for_days: int = 90
+    keep_failed_job_dirs: bool = True
+
+
+@dataclass(frozen=True)
+class JobDependency:
+    """Persisted dependency edge between two molq jobs."""
+
+    job_id: str
+    dependency_job_id: str
+    dependency_type: str
+    scheduler_dependency: str
+
+
+@dataclass(frozen=True)
+class DependencyPreviewItem:
+    """Dependency relation enriched with related job state."""
+
+    job_id: str
+    dependency_type: str
+    relation_state: str
+    job_state: JobState
+    command_display: str = ""
+    scheduler_dependency: str | None = None
+
+
+@dataclass(frozen=True)
+class DependencyPreview:
+    """Depth-1 dependency preview for a single job."""
+
+    job_id: str
+    upstream_total: int = 0
+    upstream_satisfied: int = 0
+    upstream: tuple[DependencyPreviewItem, ...] = ()
+    downstream_total: int = 0
+    downstream: tuple[DependencyPreviewItem, ...] = ()
+
+
+@dataclass(frozen=True)
 class JobSpec:
     """Internal canonical job specification. Not exported."""
 
@@ -96,6 +161,12 @@ class JobSpec:
     execution: JobExecution = field(default_factory=JobExecution)
     metadata: dict[str, str] = field(default_factory=dict)
     cwd: str = field(default_factory=lambda: str(Path.cwd()))
+    root_job_id: str = ""
+    attempt: int = 1
+    previous_attempt_job_id: str | None = None
+    retry_group_id: str | None = None
+    request_json: str = "{}"
+    profile_name: str | None = None
 
     @staticmethod
     def new_job_id() -> str:
@@ -125,6 +196,23 @@ class JobRecord:
     command_type: str = ""
     command_display: str = ""
     metadata: dict[str, str] = field(default_factory=dict)
+    root_job_id: str = ""
+    attempt: int = 1
+    previous_attempt_job_id: str | None = None
+    retry_group_id: str | None = None
+    profile_name: str | None = None
+    cleaned_at: float | None = None
+
+
+@dataclass(frozen=True)
+class StatusTransition:
+    """Immutable persisted lifecycle transition for a job."""
+
+    job_id: str
+    old_state: JobState | None
+    new_state: JobState
+    timestamp: float
+    reason: str | None = None
 
 
 # ---------------------------------------------------------------------------

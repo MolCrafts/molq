@@ -1,5 +1,6 @@
 """Tests for molq.scheduler — Scheduler protocol and implementations."""
 
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -9,8 +10,6 @@ import pytest
 from molq.errors import SchedulerError
 from molq.models import Command, JobSpec
 from molq.options import (
-    LSFSchedulerOptions,
-    PBSSchedulerOptions,
     SlurmSchedulerOptions,
 )
 from molq.scheduler import (
@@ -21,7 +20,14 @@ from molq.scheduler import (
     create_scheduler,
 )
 from molq.status import JobState
-from molq.types import Duration, JobExecution, JobResources, JobScheduling, Memory
+from molq.types import (
+    Duration,
+    JobExecution,
+    JobResources,
+    JobScheduling,
+    Memory,
+    Script,
+)
 
 
 def _make_spec(
@@ -122,16 +128,50 @@ class TestLocalScheduler:
 
         # Simulate exit code file
         (job_dir / ".exit_code").write_text("0")
-        assert scheduler.resolve_terminal_with_dir("123", job_dir) == JobState.SUCCEEDED
+        assert (
+            scheduler.resolve_terminal_with_dir("123", job_dir).state
+            == JobState.SUCCEEDED
+        )
 
         (job_dir / ".exit_code").write_text("1")
-        assert scheduler.resolve_terminal_with_dir("123", job_dir) == JobState.FAILED
+        result = scheduler.resolve_terminal_with_dir("123", job_dir)
+        assert result.state == JobState.FAILED
+        assert result.exit_code == 1
 
     def test_resolve_terminal_missing_file(self, tmp_path: Path):
         scheduler = LocalScheduler()
         job_dir = tmp_path / "job"
         job_dir.mkdir()
-        assert scheduler.resolve_terminal_with_dir("123", job_dir) == JobState.LOST
+        result = scheduler.resolve_terminal_with_dir("123", job_dir)
+        assert result.state == JobState.LOST
+        assert "exit code file" in result.failure_reason
+
+    def test_submit_redirects_logs(self, tmp_path: Path):
+        scheduler = LocalScheduler()
+        stdout_path = tmp_path / "stdout.log"
+        stderr_path = tmp_path / "stderr.log"
+        spec = JobSpec(
+            job_id="with-logs",
+            cluster_name="dev",
+            scheduler="local",
+            command=Command.from_submit_args(command="echo hello && echo boom 1>&2"),
+            execution=JobExecution(
+                cwd=tmp_path,
+                output_file=str(stdout_path),
+                error_file=str(stderr_path),
+            ),
+        )
+        job_dir = tmp_path / "job"
+        job_dir.mkdir()
+
+        pid = scheduler.submit(spec, job_dir)
+        assert pid.isdigit()
+
+        import time
+
+        time.sleep(0.5)
+        assert stdout_path.read_text().strip() == "hello"
+        assert stderr_path.read_text().strip() == "boom"
 
     def test_script_permissions(self, tmp_path: Path):
         scheduler = LocalScheduler()
@@ -202,19 +242,48 @@ class TestSlurmScheduler:
     def test_resolve_terminal_completed(self, mock_run):
         mock_run.return_value = MagicMock(stdout="COMPLETED|0:0\n", returncode=0)
         scheduler = SlurmScheduler()
-        assert scheduler.resolve_terminal("12345") == JobState.SUCCEEDED
+        result = scheduler.resolve_terminal("12345")
+        assert result.state == JobState.SUCCEEDED
+        assert result.exit_code == 0
 
     @patch("molq.scheduler.subprocess.run")
     def test_resolve_terminal_failed(self, mock_run):
         mock_run.return_value = MagicMock(stdout="FAILED|1:0\n", returncode=0)
         scheduler = SlurmScheduler()
-        assert scheduler.resolve_terminal("12345") == JobState.FAILED
+        result = scheduler.resolve_terminal("12345")
+        assert result.state == JobState.FAILED
+        assert result.exit_code == 1
 
     @patch("molq.scheduler.subprocess.run")
     def test_resolve_terminal_timeout(self, mock_run):
         mock_run.return_value = MagicMock(stdout="TIMEOUT|0:15\n", returncode=0)
         scheduler = SlurmScheduler()
-        assert scheduler.resolve_terminal("12345") == JobState.TIMED_OUT
+        result = scheduler.resolve_terminal("12345")
+        assert result.state == JobState.TIMED_OUT
+        assert result.failure_reason is not None
+
+    @patch("molq.scheduler.subprocess.run")
+    def test_submit_script_path_uses_materialized_script(
+        self, mock_run, tmp_path: Path
+    ):
+        mock_run.return_value = MagicMock(stdout="12345\n", stderr="", returncode=0)
+        scheduler = SlurmScheduler()
+        source = tmp_path / "source.sh"
+        source.write_text("#!/bin/bash\necho from-source\n")
+        job_dir = tmp_path / "job"
+        job_dir.mkdir()
+        shutil.copy2(source, job_dir / "user_script.sh")
+        spec = JobSpec(
+            job_id="script-path",
+            cluster_name="alpha",
+            scheduler="slurm",
+            command=Command.from_submit_args(script=Script.path(source)),
+        )
+
+        scheduler.submit(spec, job_dir)
+        script = (job_dir / "run_slurm.sh").read_text()
+        assert 'bash "' in script
+        assert "user_script.sh" in script
 
     @patch("molq.scheduler.subprocess.run")
     def test_cancel(self, mock_run):
@@ -270,7 +339,33 @@ class TestPBSScheduler:
             stdout="Job: 123\n  Exit_status=0\n", returncode=0
         )
         scheduler = PBSScheduler()
-        assert scheduler.resolve_terminal("123") == JobState.SUCCEEDED
+        result = scheduler.resolve_terminal("123")
+        assert result.state == JobState.SUCCEEDED
+        assert result.exit_code == 0
+
+    @patch("molq.scheduler.subprocess.run")
+    def test_submit_script_path_uses_materialized_script(
+        self, mock_run, tmp_path: Path
+    ):
+        mock_run.return_value = MagicMock(
+            stdout="12345.pbs01\n", stderr="", returncode=0
+        )
+        scheduler = PBSScheduler()
+        source = tmp_path / "source.sh"
+        source.write_text("#!/bin/bash\necho from-source\n")
+        job_dir = tmp_path / "job"
+        job_dir.mkdir()
+        shutil.copy2(source, job_dir / "user_script.sh")
+        spec = JobSpec(
+            job_id="script-path",
+            cluster_name="alpha",
+            scheduler="pbs",
+            command=Command.from_submit_args(script=Script.path(source)),
+        )
+
+        scheduler.submit(spec, job_dir)
+        script = (job_dir / "run_pbs.sh").read_text()
+        assert "user_script.sh" in script
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +408,34 @@ class TestLSFScheduler:
             stdout="Summary: Done successfully.", returncode=0
         )
         scheduler = LSFScheduler()
-        assert scheduler.resolve_terminal("12345") == JobState.SUCCEEDED
+        result = scheduler.resolve_terminal("12345")
+        assert result.state == JobState.SUCCEEDED
+
+    @patch("molq.scheduler.subprocess.run")
+    def test_submit_script_path_uses_materialized_script(
+        self, mock_run, tmp_path: Path
+    ):
+        mock_run.return_value = MagicMock(
+            stdout="Job <12345> is submitted to queue <normal>.\n",
+            stderr="",
+            returncode=0,
+        )
+        scheduler = LSFScheduler()
+        source = tmp_path / "source.sh"
+        source.write_text("#!/bin/bash\necho from-source\n")
+        job_dir = tmp_path / "job"
+        job_dir.mkdir()
+        shutil.copy2(source, job_dir / "user_script.sh")
+        spec = JobSpec(
+            job_id="script-path",
+            cluster_name="alpha",
+            scheduler="lsf",
+            command=Command.from_submit_args(script=Script.path(source)),
+        )
+
+        scheduler.submit(spec, job_dir)
+        script = (job_dir / "run_lsf.sh").read_text()
+        assert "user_script.sh" in script
 
 
 # ---------------------------------------------------------------------------

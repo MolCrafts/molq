@@ -1,25 +1,25 @@
-# Molq: Unified Job Queue
+# molq
 
-Molq provides a single Python API for submitting, monitoring, and managing computational jobs across local execution and HPC cluster schedulers.
+Unified job queue for Python services, research scripts, and internal tooling that need one submission interface across local execution and HPC schedulers.
 
-## Why Molq?
+[Get started](getting-started.md){ .md-button .md-button--primary }
+[API reference](api.md){ .md-button }
 
-Working with compute clusters typically involves writing shell scripts, juggling scheduler-specific flags, and building ad-hoc monitoring tools. Molq replaces this with a typed Python interface:
+## What it gives you
 
-- Write once, run anywhere -- local, SLURM, PBS, or LSF
-- Typed resource specs prevent misconfigured submissions
-- SQLite-backed persistence tracks job lifecycle automatically
-- Pluggable monitoring with exponential backoff
+- One `Submitor` API for `local`, `slurm`, `pbs`, and `lsf`
+- Typed resources and execution models instead of backend-specific string munging
+- SQLite persistence with WAL mode and durable job history
+- Reconciliation, blocking waits, and pluggable polling strategies
+- Rich terminal workflows for logs, status, watch, and full-screen monitoring
 
-## Quick Example
+## Quick example
 
 ```python
-from molq import Submitor, JobResources, Memory, Duration
+from molq import Duration, JobResources, Memory, Submitor
 
-# Create a submitor targeting a SLURM cluster
 cluster = Submitor("hpc", "slurm")
 
-# Submit a job with typed resource specs
 job = cluster.submit(
     argv=["python", "train.py"],
     resources=JobResources(
@@ -29,14 +29,15 @@ job = cluster.submit(
     ),
 )
 
-# Block until completion
 record = job.wait()
-print(record.state)  # JobState.SUCCEEDED
+assert record.state.value in {"succeeded", "failed", "cancelled"}
 ```
 
-## Getting Started
+## Documentation map
 
-- **[Installation & First Job](tutorial/getting-started.md)** -- Up and running in 5 minutes
-- **[Core Concepts](tutorial/core-concepts.md)** -- Architecture and design patterns
-- **[API Reference](api/index.md)** -- Complete type and class documentation
-- **[Recipes](recipes/machine-learning.md)** -- Real-world examples
+- [Getting Started](getting-started.md) — installation, first job, and CLI basics
+- [Schedulers](schedulers.md) — backend matrix and scheduler option classes
+- [Monitoring](monitoring.md) — lifecycle, reconciliation, polling, dashboards, and logs
+- [CLI Reference](cli.md) — command reference for `molq`
+- [API Reference](api.md) — exported classes, enums, options, and errors
+- [Release Notes](release-notes.md) — current release series summary

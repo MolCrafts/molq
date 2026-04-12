@@ -5,6 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from molq.scheduler import SchedulerCapabilities
+from molq.store import JobStore
+from molq.testing import FakeScheduler, make_submitor
+
 
 @pytest.fixture(scope="session", autouse=True)
 def temp_workdir():
@@ -113,6 +117,76 @@ def mock_job_environment(tmp_path, monkeypatch):
 
     # Restore original directory
     os.chdir(original_cwd)
+
+
+# ---------------------------------------------------------------------------
+# Shared store / scheduler fixtures (avoids duplication across test modules)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def memory_store():
+    """In-memory JobStore; fast and isolated."""
+    store = JobStore(":memory:")
+    yield store
+    store.close()
+
+
+@pytest.fixture
+def mock_scheduler(mocker):
+    """MagicMock implementing the Scheduler protocol.
+
+    submit() returns auto-incrementing IDs starting at 10000.
+    poll_many() returns {} (no active jobs) by default.
+    resolve_terminal() returns None by default.
+    """
+    m = mocker.MagicMock()
+    _counter = iter(range(10000, 99999))
+    m.submit.side_effect = lambda spec, job_dir: str(next(_counter))
+    m.poll_many.return_value = {}
+    m.resolve_terminal.return_value = None
+    m.capabilities.return_value = SchedulerCapabilities(
+        supports_cwd=True,
+        supports_env=True,
+        supports_output_file=True,
+        supports_error_file=True,
+        supports_job_name=True,
+        supports_cpu_count=True,
+        supports_memory=True,
+        supports_gpu_count=True,
+        supports_gpu_type=True,
+        supports_time_limit=True,
+        supports_queue=True,
+        supports_account=True,
+        supports_priority=True,
+        supports_dependency=True,
+        supports_node_count=True,
+        supports_exclusive_node=True,
+        supports_array_jobs=True,
+        supports_email=True,
+        supports_qos=True,
+        supports_reservation=True,
+    )
+    return m
+
+
+@pytest.fixture
+def fake_scheduler():
+    """FakeScheduler with instant completion and 'succeeded' outcome."""
+    return FakeScheduler(outcomes="succeeded", job_duration=0.0)
+
+
+@pytest.fixture
+def fake_submitor(tmp_path):
+    """Submitor backed by FakeScheduler + in-memory store.
+
+    Jobs complete instantly with 'succeeded' outcome.
+    """
+    with make_submitor("test", outcomes="succeeded", job_duration=0.0) as s:
+        yield s
+
+
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
