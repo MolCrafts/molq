@@ -27,7 +27,7 @@ classifiers = [
 ]
 dependencies = [
     "typer>=0.9",
-    "rich>=13.0",
+    "rich>=14.3.3",
 ]
 
 [project.urls]
