@@ -29,6 +29,8 @@ classifiers = [
 dependencies = [
   "typer>=0.9",
   "rich>=14.3.3",
+  "molcrafts-mollog",
+  "molcrafts-molcfg",
 ]
 
 [project.urls]

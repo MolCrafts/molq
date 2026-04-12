@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from molcfg import ConfigLoader, OneOf, TomlFileSource
+from molcfg import ValidationError as CfgValidationError
+from molcfg import validate as cfg_validate
 
 from molq.errors import ConfigError
 from molq.models import RetentionPolicy, RetryPolicy, SubmitorDefaults
@@ -47,6 +50,14 @@ class MolqConfig:
     profiles: dict[str, MolqProfile]
 
 
+# Validation schema for a single profile section
+class _ProfileSchema:
+    scheduler: str
+    cluster_name: str
+    jobs_dir: str | None = None
+    __constraints__: dict = {"scheduler": [OneOf(*OPTIONS_TYPE_MAP.keys())]}
+
+
 def default_config_path() -> Path:
     return Path.home() / ".molq" / "config.toml"
 
@@ -56,11 +67,15 @@ def load_config(path: str | Path | None = None) -> MolqConfig:
     if not config_path.exists():
         return MolqConfig(profiles={})
 
-    data = tomllib.loads(config_path.read_text())
-    raw_profiles = data.get("profiles", {})
+    cfg = ConfigLoader([TomlFileSource(config_path)]).load()
+    raw_profiles = cfg.get("profiles")
+    if not raw_profiles:
+        return MolqConfig(profiles={})
+
     profiles: dict[str, MolqProfile] = {}
     for name, section in raw_profiles.items():
-        profiles[name] = _parse_profile(name, section)
+        data: dict[str, Any] = section.to_dict() if hasattr(section, "to_dict") else section
+        profiles[name] = _parse_profile(name, data)
     return MolqConfig(profiles=profiles)
 
 
@@ -73,24 +88,19 @@ def load_profile(name: str, path: str | Path | None = None) -> MolqProfile:
 
 
 def _parse_profile(name: str, data: dict[str, Any]) -> MolqProfile:
-    scheduler = data.get("scheduler")
-    cluster_name = data.get("cluster_name")
-    if not scheduler or not cluster_name:
+    try:
+        cfg_validate(data, _ProfileSchema, allow_extra=True)
+    except CfgValidationError as exc:
         raise ConfigError(
-            f"Profile {name!r} must define scheduler and cluster_name",
+            f"Profile {name!r} is invalid: {'; '.join(exc.errors)}",
             profile=name,
-        )
-    if scheduler not in OPTIONS_TYPE_MAP:
-        raise ConfigError(
-            f"Profile {name!r} references unknown scheduler {scheduler!r}",
-            profile=name,
-            scheduler=scheduler,
-        )
+        ) from exc
+
+    scheduler: str = data["scheduler"]
+    cluster_name: str = data["cluster_name"]
 
     defaults = data.get("defaults", {})
-    scheduler_options = _parse_scheduler_options(
-        scheduler, data.get("scheduler_options")
-    )
+    scheduler_options = _parse_scheduler_options(scheduler, data.get("scheduler_options"))
     return MolqProfile(
         name=name,
         scheduler=scheduler,
