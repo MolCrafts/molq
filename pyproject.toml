@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "molcrafts-molq"
-version = "0.1.0"
+version = "0.2.0"
 description = "Unified job queue for local execution and HPC schedulers"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -21,8 +21,6 @@ classifiers = [
   "Operating System :: POSIX :: Linux",
   "Operating System :: MacOS",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Topic :: Scientific/Engineering",
@@ -50,10 +48,8 @@ dev = [
   "pytest-cov",
   "coverage[toml]",
   "build",
-  "black",
-  "isort",
-  "flake8",
-  "mypy",
+  "ruff",
+  "ty",
 ]
 docs = [
   "zensical>=0.0.27",
@@ -73,18 +69,13 @@ molq = ["py.typed"]
 testpaths = ["tests"]
 addopts = "-ra"
 
-[tool.black]
+[tool.ruff]
 line-length = 88
-target-version = ['py310']
+target-version = "py312"
 
-[tool.isort]
-profile = "black"
-line_length = 88
-multi_line_output = 3
-include_trailing_comma = true
-force_grid_wrap = 0
-use_parentheses = true
-ensure_newline_before_comments = true
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
 
 [tool.coverage.run]
 source = ["src"]
