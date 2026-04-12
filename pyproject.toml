@@ -1,65 +1,77 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "molcrafts-molq"
 version = "0.1.0"
-description = "Unified job queue for local and HPC cluster execution"
-authors = [
-    {name = "Roy Kid", email = "lijichen365@gmail.com"}
-]
+description = "Unified job queue for local execution and HPC schedulers"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Roy Kid", email = "lijichen365@gmail.com" }
+]
 keywords = ["job", "queue", "cluster", "slurm", "hpc", "scheduler"]
 classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Science/Research",
-    "Operating System :: POSIX :: Linux",
-    "Operating System :: MacOS",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: System :: Distributed Computing",
-    "Topic :: Scientific/Engineering",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Developers",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+  "Topic :: System :: Distributed Computing",
 ]
 dependencies = [
-    "typer>=0.9",
-    "rich>=14.3.3",
+  "typer>=0.9",
+  "rich>=14.3.3",
 ]
 
 [project.urls]
-Homepage = "https://github.com/molcrafts/molq"
-Documentation = "https://molcrafts.github.io/molq"
-Repository = "https://github.com/molcrafts/molq"
-Issues = "https://github.com/molcrafts/molq/issues"
-Changelog = "https://github.com/molcrafts/molq/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/MolCrafts/molq"
+Documentation = "https://github.com/MolCrafts/molq/tree/master/docs"
+Repository = "https://github.com/MolCrafts/molq"
+Issues = "https://github.com/MolCrafts/molq/issues"
+Changelog = "https://github.com/MolCrafts/molq/blob/master/CHANGELOG.md"
 
 [project.scripts]
 molq = "molq.cli.main:app"
 
-
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0",
-    "pytest-mock",
-    "pytest-cov",
-    "coverage[toml]",
-    "build",
-
-    "black",
-    "isort",
-    "flake8",
-    "mypy",
+  "pytest>=7.0",
+  "pytest-mock",
+  "pytest-cov",
+  "coverage[toml]",
+  "build",
+  "black",
+  "isort",
+  "flake8",
+  "mypy",
 ]
 docs = [
-    "zensical",
+  "zensical>=0.0.27",
 ]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["molq*"]
+
+[tool.setuptools.package-data]
+molq = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
 
 [tool.black]
 line-length = 88
@@ -80,14 +92,14 @@ omit = ["*/tests/*", "*/test_*"]
 
 [tool.coverage.report]
 exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "if self.debug:",
-    "if settings.DEBUG",
-    "raise AssertionError",
-    "raise NotImplementedError",
-    "if 0:",
-    "if __name__ == .__main__.:",
-    "class .*\\bProtocol\\):",
-    "@(abc\\.)?abstractmethod",
+  "pragma: no cover",
+  "def __repr__",
+  "if self.debug:",
+  "if settings.DEBUG",
+  "raise AssertionError",
+  "raise NotImplementedError",
+  "if 0:",
+  "if __name__ == .__main__.:",
+  "class .*\\bProtocol\\):",
+  "@(abc\\.)?abstractmethod",
 ]

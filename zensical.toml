@@ -1,83 +1,37 @@
 [project]
-site_name = "Molq"
-site_description = "Unified job queue for local and HPC cluster execution"
+site_name = "molcrafts-molq"
+site_url = "https://github.com/MolCrafts/molq/tree/master/docs"
+site_description = "Unified job queue for local execution and HPC schedulers."
 site_author = "Roy Kid"
-repo_url = "https://github.com/molcrafts/molq"
+copyright = "&copy; 2026 Roy Kid"
+docs_dir = "docs"
+site_dir = "site"
+repo_url = "https://github.com/MolCrafts/molq"
+repo_name = "MolCrafts/molq"
+edit_uri = "edit/master/docs/"
+nav = [
+  {"Overview" = "index.md"},
+  {"Guide" = [
+    "getting-started.md",
+    "schedulers.md",
+    "monitoring.md",
+    "cli.md"
+  ]},
+  {"Reference" = [
+    "api.md",
+    "release-notes.md"
+  ]}
+]
 
 [project.theme]
-name = "modern"
 features = [
-    "navigation.tabs",
-    "navigation.top",
-    "navigation.instant",
-    "navigation.tracking",
-    "search.highlight",
-    "content.code.copy",
-    "content.tabs.link",
-    "navigation.footer",
-    "navigation.indexes",
-    "navigation.path"
+  "navigation.instant",
+  "navigation.instant.progress",
+  "content.action.edit",
+  "content.action.view",
 ]
 
-[[project.theme.palette]]
-scheme = "default"
-primary = "blue"
-accent = "blue"
-toggle.icon = "lucide/sun"
-toggle.name = "Switch to dark mode"
-
-[[project.theme.palette]]
-scheme = "slate"
-primary = "blue"
-accent = "blue"
-toggle.icon = "lucide/moon"
-toggle.name = "Switch to light mode"
-
-[markdown]
-extensions = [
-    "admonition",
-    "attr_list",
-    "md_in_html"
-]
-
-[markdown.toc]
-permalink = true
-
-[markdown.highlight]
-anchor_linenums = true
-
-[markdown.superfences]
-
-[markdown.tabbed]
-alternate_style = true
-
-[markdown.emoji]
-index = "twemoji"
-generator = "to_svg"
-
-[plugins]
-search = {}
-
-[plugins.mkdocstrings]
-handlers.python.options = { docstring_style = "google", show_source = false, members_order = "source", group_by_category = true }
-
-[nav]
-Home = "index.md"
-
-[nav.Tutorial]
-"Getting Started" = "tutorial/getting-started.md"
-"Core Concepts" = "tutorial/core-concepts.md"
-"Advanced Usage" = "tutorial/advanced-usage.md"
-
-[nav.Recipes]
-"Machine Learning" = "recipes/machine-learning.md"
-"Scientific Computing" = "recipes/scientific-computing.md"
-
-[nav."API Reference"]
-Overview = "api/index.md"
-"Submitor API" = "api/submit.md"
-"Types" = "api/resources.md"
-"CLI Reference" = "api/cli.md"
-
-[nav.Specification]
-"Job Configuration" = "spec/job-config.md"
+[project.theme.icon]
+repo = "fontawesome/brands/github"
+edit = "material/pencil"
+view = "material/eye"
