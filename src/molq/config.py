@@ -74,7 +74,9 @@ def load_config(path: str | Path | None = None) -> MolqConfig:
 
     profiles: dict[str, MolqProfile] = {}
     for name, section in raw_profiles.items():
-        data: dict[str, Any] = section.to_dict() if hasattr(section, "to_dict") else section
+        data: dict[str, Any] = (
+            section.to_dict() if hasattr(section, "to_dict") else section
+        )
         profiles[name] = _parse_profile(name, data)
     return MolqConfig(profiles=profiles)
 
@@ -100,7 +102,9 @@ def _parse_profile(name: str, data: dict[str, Any]) -> MolqProfile:
     cluster_name: str = data["cluster_name"]
 
     defaults = data.get("defaults", {})
-    scheduler_options = _parse_scheduler_options(scheduler, data.get("scheduler_options"))
+    scheduler_options = _parse_scheduler_options(
+        scheduler, data.get("scheduler_options")
+    )
     return MolqProfile(
         name=name,
         scheduler=scheduler,
