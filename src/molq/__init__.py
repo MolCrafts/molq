@@ -27,13 +27,14 @@ from molq.errors import (
     StoreError,
     SubmitError,
 )
-from molq.models import JobRecord, SubmitorDefaults
+from molq.models import JobRecord, StatusTransition, SubmitorDefaults
 from molq.options import (
     LocalSchedulerOptions,
     LSFSchedulerOptions,
     PBSSchedulerOptions,
     SlurmSchedulerOptions,
 )
+from molq.scheduler import SchedulerCapabilities
 from molq.status import JobState
 from molq.submitor import JobHandle, Submitor
 from molq.types import (
@@ -64,7 +65,9 @@ __all__ = [
     # Models
     "SubmitorDefaults",
     "JobRecord",
+    "StatusTransition",
     "JobState",
+    "SchedulerCapabilities",
     # Options
     "LocalSchedulerOptions",
     "SlurmSchedulerOptions",

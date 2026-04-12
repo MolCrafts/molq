@@ -15,13 +15,6 @@ from molq.types import JobResources, Memory, Script
 
 
 @pytest.fixture
-def memory_store():
-    store = JobStore(":memory:")
-    yield store
-    store.close()
-
-
-@pytest.fixture
 def file_store(tmp_path):
     store = JobStore(tmp_path / "test.db")
     yield store
@@ -147,6 +140,21 @@ class TestRecordTransition:
         assert rows[1]["old_state"] == "created"
         assert rows[1]["new_state"] == "submitted"
         assert rows[1]["reason"] == "submitted to scheduler"
+
+    def test_get_transitions(self, memory_store: JobStore):
+        memory_store.insert_job(_make_spec())
+        memory_store.record_transition(
+            "test-id",
+            old_state=JobState.CREATED,
+            new_state=JobState.SUBMITTED,
+            timestamp=time.time() + 1,
+            reason="submitted to scheduler",
+        )
+
+        transitions = memory_store.get_transitions("test-id")
+        assert len(transitions) == 2
+        assert transitions[0].new_state == JobState.CREATED
+        assert transitions[1].new_state == JobState.SUBMITTED
 
 
 class TestListRecords:

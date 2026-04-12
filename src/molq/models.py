@@ -1,6 +1,6 @@
 """Data models for molq.
 
-Public: JobRecord, SubmitorDefaults
+Public: JobRecord, StatusTransition, SubmitorDefaults
 Internal: Command, JobSpec
 """
 
@@ -125,6 +125,17 @@ class JobRecord:
     command_type: str = ""
     command_display: str = ""
     metadata: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class StatusTransition:
+    """Immutable persisted lifecycle transition for a job."""
+
+    job_id: str
+    old_state: JobState | None
+    new_state: JobState
+    timestamp: float
+    reason: str | None = None
 
 
 # ---------------------------------------------------------------------------

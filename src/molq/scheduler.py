@@ -9,12 +9,12 @@ import getpass
 import logging
 import os
 import re
-import shutil
 import signal
 import subprocess
 import threading
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -39,6 +39,10 @@ from molq.status import JobState
 class Scheduler(Protocol):
     """Internal protocol for scheduler backends."""
 
+    def capabilities(self) -> "SchedulerCapabilities":
+        """Return the backend capability contract."""
+        ...
+
     def submit(self, spec: JobSpec, job_dir: Path) -> str:
         """Submit a job. Returns scheduler_job_id."""
         ...
@@ -51,9 +55,45 @@ class Scheduler(Protocol):
         """Cancel a job."""
         ...
 
-    def resolve_terminal(self, scheduler_job_id: str) -> JobState | None:
+    def resolve_terminal(self, scheduler_job_id: str) -> "TerminalStatus | None":
         """Determine terminal status for a disappeared job."""
         ...
+
+
+@dataclass(frozen=True)
+class TerminalStatus:
+    """Terminal scheduler resolution with optional failure metadata."""
+
+    state: JobState
+    exit_code: int | None = None
+    failure_reason: str | None = None
+    raw_state: str | None = None
+
+
+@dataclass(frozen=True)
+class SchedulerCapabilities:
+    """Declared scheduler support matrix used for submit-time validation."""
+
+    supports_cwd: bool = False
+    supports_env: bool = False
+    supports_output_file: bool = False
+    supports_error_file: bool = False
+    supports_job_name: bool = False
+    supports_cpu_count: bool = False
+    supports_memory: bool = False
+    supports_gpu_count: bool = False
+    supports_gpu_type: bool = False
+    supports_time_limit: bool = False
+    supports_queue: bool = False
+    supports_account: bool = False
+    supports_priority: bool = False
+    supports_dependency: bool = False
+    supports_node_count: bool = False
+    supports_exclusive_node: bool = False
+    supports_array_jobs: bool = False
+    supports_email: bool = False
+    supports_qos: bool = False
+    supports_reservation: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +115,14 @@ class LocalScheduler:
         self._procs: dict[int, subprocess.Popen] = {}
         self._procs_lock = threading.Lock()
 
+    def capabilities(self) -> SchedulerCapabilities:
+        return SchedulerCapabilities(
+            supports_cwd=True,
+            supports_env=True,
+            supports_output_file=True,
+            supports_error_file=True,
+        )
+
     def submit(self, spec: JobSpec, job_dir: Path) -> str:
         script_path = self._materialize_script(spec, job_dir)
         exit_code_path = job_dir / ".exit_code"
@@ -93,15 +141,24 @@ class LocalScheduler:
         if spec.execution.env:
             env = {**os.environ, **spec.execution.env}
 
-        proc = subprocess.Popen(
-            ["bash", str(wrapper_path)],
-            cwd=str(cwd),
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        stdout_handle = _open_output_handle(spec.execution.output_file)
+        stderr_handle = _open_output_handle(spec.execution.error_file)
+
+        try:
+            proc = subprocess.Popen(
+                ["bash", str(wrapper_path)],
+                cwd=str(cwd),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_handle or subprocess.DEVNULL,
+                stderr=stderr_handle or subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        finally:
+            if stdout_handle is not None:
+                stdout_handle.close()
+            if stderr_handle is not None:
+                stderr_handle.close()
         self._track(proc)
         return str(proc.pid)
 
@@ -166,40 +223,32 @@ class LocalScheduler:
             except (ProcessLookupError, PermissionError):
                 pass
 
-    def resolve_terminal(self, scheduler_job_id: str) -> JobState | None:
+    def resolve_terminal(self, scheduler_job_id: str) -> TerminalStatus | None:
         # We cannot determine exit code without the job_dir here.
         # The reconciler passes through resolve_terminal_with_dir instead.
         return None
 
     def resolve_terminal_with_dir(
         self, scheduler_job_id: str, job_dir: Path
-    ) -> JobState | None:
+    ) -> TerminalStatus | None:
         """Check the exit code file written by the wrapper script."""
         exit_code_path = job_dir / ".exit_code"
         if exit_code_path.exists():
             try:
                 code = int(exit_code_path.read_text().strip())
-                return JobState.SUCCEEDED if code == 0 else JobState.FAILED
+                state = JobState.SUCCEEDED if code == 0 else JobState.FAILED
+                reason = None if code == 0 else f"process exited with code {code}"
+                return TerminalStatus(state=state, exit_code=code, failure_reason=reason)
             except (ValueError, OSError):
                 pass
-        return JobState.LOST
+        return TerminalStatus(
+            state=JobState.LOST,
+            failure_reason="exit code file missing for local job",
+        )
 
     def _materialize_script(self, spec: JobSpec, job_dir: Path) -> Path:
-        cmd = spec.command
         script_path = job_dir / "run.sh"
-
-        if cmd.script is not None:
-            if cmd.script.variant == "inline":
-                _atomic_write_script(script_path, f"#!/bin/bash\n{cmd.script.text}\n")
-            elif cmd.script.variant == "path" and cmd.script.file_path:
-                shutil.copy2(cmd.script.file_path, script_path)
-                script_path.chmod(0o700)
-        elif cmd.argv is not None:
-            args_escaped = " ".join(_shell_quote(a) for a in cmd.argv)
-            _atomic_write_script(script_path, f"#!/bin/bash\n{args_escaped}\n")
-        elif cmd.command is not None:
-            _atomic_write_script(script_path, f"#!/bin/bash\n{cmd.command}\n")
-
+        _atomic_write_script(script_path, _render_job_script(spec, job_dir))
         return script_path
 
 
@@ -235,6 +284,27 @@ class SlurmScheduler:
 
     def __init__(self, options: SlurmSchedulerOptions | None = None) -> None:
         self._opts = options or SlurmSchedulerOptions()
+
+    def capabilities(self) -> SchedulerCapabilities:
+        return SchedulerCapabilities(
+            supports_cwd=True,
+            supports_env=True,
+            supports_output_file=True,
+            supports_error_file=True,
+            supports_job_name=True,
+            supports_cpu_count=True,
+            supports_memory=True,
+            supports_gpu_count=True,
+            supports_gpu_type=True,
+            supports_time_limit=True,
+            supports_queue=True,
+            supports_account=True,
+            supports_dependency=True,
+            supports_exclusive_node=True,
+            supports_array_jobs=True,
+            supports_qos=True,
+            supports_reservation=True,
+        )
 
     def submit(self, spec: JobSpec, job_dir: Path) -> str:
         script_path = self._generate_script(spec, job_dir)
@@ -302,7 +372,7 @@ class SlurmScheduler:
             timeout=30,
         )
 
-    def resolve_terminal(self, scheduler_job_id: str) -> JobState | None:
+    def resolve_terminal(self, scheduler_job_id: str) -> TerminalStatus | None:
         try:
             proc = subprocess.run(
                 [
@@ -323,8 +393,19 @@ class SlurmScheduler:
                 return None
 
             first_line = proc.stdout.strip().split("\n")[0]
-            state_str = first_line.split("|")[0].strip().split()[0]
-            return _SLURM_SACCT_MAP.get(state_str)
+            parts = first_line.split("|")
+            raw_state = parts[0].strip()
+            state_str = raw_state.split()[0]
+            state = _SLURM_SACCT_MAP.get(state_str)
+            if state is None:
+                return None
+            exit_code = _parse_exit_code(parts[1]) if len(parts) > 1 else None
+            return TerminalStatus(
+                state=state,
+                exit_code=exit_code,
+                failure_reason=_default_failure_reason(state, exit_code, raw_state),
+                raw_state=raw_state,
+            )
         except (subprocess.TimeoutExpired, FileNotFoundError, IndexError):
             return None
 
@@ -340,8 +421,7 @@ class SlurmScheduler:
             else:
                 lines.append(f"#SBATCH --{key}={value}")
 
-        lines.append("")
-        lines.append(self._command_text(spec))
+        lines.extend(_render_job_lines(spec, job_dir))
 
         script_path.write_text("\n".join(lines) + "\n")
         script_path.chmod(0o700)
@@ -385,20 +465,6 @@ class SlurmScheduler:
 
         return mapped
 
-    def _command_text(self, spec: JobSpec) -> str:
-        cmd = spec.command
-        if cmd.argv is not None:
-            return " ".join(_shell_quote(a) for a in cmd.argv)
-        if cmd.command is not None:
-            return cmd.command
-        if cmd.script is not None:
-            if cmd.script.variant == "inline":
-                return cmd.script.text or ""
-            if cmd.script.variant == "path" and cmd.script.file_path:
-                return f'bash "{cmd.script.file_path}"'
-        return ""
-
-
 # ---------------------------------------------------------------------------
 # PBS Scheduler
 # ---------------------------------------------------------------------------
@@ -420,6 +486,22 @@ class PBSScheduler:
 
     def __init__(self, options: PBSSchedulerOptions | None = None) -> None:
         self._opts = options or PBSSchedulerOptions()
+
+    def capabilities(self) -> SchedulerCapabilities:
+        return SchedulerCapabilities(
+            supports_cwd=True,
+            supports_env=True,
+            supports_output_file=True,
+            supports_error_file=True,
+            supports_job_name=True,
+            supports_cpu_count=True,
+            supports_memory=True,
+            supports_gpu_count=True,
+            supports_time_limit=True,
+            supports_queue=True,
+            supports_account=True,
+            supports_node_count=True,
+        )
 
     def submit(self, spec: JobSpec, job_dir: Path) -> str:
         script_path = self._generate_script(spec, job_dir)
@@ -483,7 +565,7 @@ class PBSScheduler:
             timeout=30,
         )
 
-    def resolve_terminal(self, scheduler_job_id: str) -> JobState | None:
+    def resolve_terminal(self, scheduler_job_id: str) -> TerminalStatus | None:
         try:
             proc = subprocess.run(
                 [self._opts.tracejob_path, scheduler_job_id],
@@ -498,13 +580,22 @@ class PBSScheduler:
             for line in proc.stdout.split("\n"):
                 if "Exit_status=" in line:
                     code = line.split("Exit_status=")[1].split()[0]
-                    if code == "0":
-                        return JobState.SUCCEEDED
-                    if code == "-11":
-                        return JobState.CANCELLED
-                    return JobState.FAILED
+                    exit_code = int(code)
+                    if exit_code == 0:
+                        return TerminalStatus(state=JobState.SUCCEEDED, exit_code=0)
+                    if exit_code < 0:
+                        return TerminalStatus(
+                            state=JobState.CANCELLED,
+                            exit_code=exit_code,
+                            failure_reason=f"PBS job cancelled (exit {exit_code})",
+                        )
+                    return TerminalStatus(
+                        state=JobState.FAILED,
+                        exit_code=exit_code,
+                        failure_reason=f"PBS job failed with exit code {exit_code}",
+                    )
             return None
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
             return None
 
     def _generate_script(self, spec: JobSpec, job_dir: Path) -> Path:
@@ -519,8 +610,7 @@ class PBSScheduler:
             else:
                 lines.append(f"#PBS {key} {value}")
 
-        lines.append("")
-        lines.append(self._command_text(spec))
+        lines.extend(_render_job_lines(spec, job_dir))
 
         script_path.write_text("\n".join(lines) + "\n")
         script_path.chmod(0o700)
@@ -560,17 +650,6 @@ class PBSScheduler:
 
         return mapped
 
-    def _command_text(self, spec: JobSpec) -> str:
-        cmd = spec.command
-        if cmd.argv is not None:
-            return " ".join(_shell_quote(a) for a in cmd.argv)
-        if cmd.command is not None:
-            return cmd.command
-        if cmd.script is not None and cmd.script.variant == "inline":
-            return cmd.script.text or ""
-        return ""
-
-
 # ---------------------------------------------------------------------------
 # LSF Scheduler
 # ---------------------------------------------------------------------------
@@ -593,6 +672,22 @@ class LSFScheduler:
 
     def __init__(self, options: LSFSchedulerOptions | None = None) -> None:
         self._opts = options or LSFSchedulerOptions()
+
+    def capabilities(self) -> SchedulerCapabilities:
+        return SchedulerCapabilities(
+            supports_cwd=True,
+            supports_env=True,
+            supports_output_file=True,
+            supports_error_file=True,
+            supports_job_name=True,
+            supports_cpu_count=True,
+            supports_memory=True,
+            supports_gpu_count=True,
+            supports_gpu_type=True,
+            supports_time_limit=True,
+            supports_queue=True,
+            supports_account=True,
+        )
 
     def submit(self, spec: JobSpec, job_dir: Path) -> str:
         script_path = self._generate_script(spec, job_dir)
@@ -662,7 +757,7 @@ class LSFScheduler:
             timeout=30,
         )
 
-    def resolve_terminal(self, scheduler_job_id: str) -> JobState | None:
+    def resolve_terminal(self, scheduler_job_id: str) -> TerminalStatus | None:
         try:
             proc = subprocess.run(
                 [self._opts.bhist_path, "-l", scheduler_job_id],
@@ -676,9 +771,18 @@ class LSFScheduler:
 
             lower = proc.stdout.lower()
             if "done" in lower:
-                return JobState.SUCCEEDED
+                return TerminalStatus(state=JobState.SUCCEEDED, raw_state="done")
+            match = re.search(r"exit code\s+(\d+)", lower)
             if "exit" in lower:
-                return JobState.FAILED
+                code = int(match.group(1)) if match else None
+                return TerminalStatus(
+                    state=JobState.FAILED,
+                    exit_code=code,
+                    failure_reason=_default_failure_reason(
+                        JobState.FAILED, code, "exit"
+                    ),
+                    raw_state="exit",
+                )
             return None
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return None
@@ -691,8 +795,7 @@ class LSFScheduler:
         for key, value in directives.items():
             lines.append(f"#BSUB {key} {value}")
 
-        lines.append("")
-        lines.append(self._command_text(spec))
+        lines.extend(_render_job_lines(spec, job_dir))
 
         script_path.write_text("\n".join(lines) + "\n")
         script_path.chmod(0o700)
@@ -728,17 +831,6 @@ class LSFScheduler:
             mapped["-gpu"] = gpu_str
 
         return mapped
-
-    def _command_text(self, spec: JobSpec) -> str:
-        cmd = spec.command
-        if cmd.argv is not None:
-            return " ".join(_shell_quote(a) for a in cmd.argv)
-        if cmd.command is not None:
-            return cmd.command
-        if cmd.script is not None and cmd.script.variant == "inline":
-            return cmd.script.text or ""
-        return ""
-
 
 # ---------------------------------------------------------------------------
 # Factory
@@ -797,3 +889,70 @@ def _atomic_write_script(path: Path, content: str) -> None:
         f.flush()
         os.fsync(f.fileno())
     os.chmod(str(path), 0o700)
+
+
+def _render_job_script(spec: JobSpec, job_dir: Path) -> str:
+    return "\n".join(["#!/bin/bash", *_render_job_lines(spec, job_dir)]) + "\n"
+
+
+def _render_job_lines(spec: JobSpec, job_dir: Path) -> list[str]:
+    lines: list[str] = [""]
+
+    if spec.execution.cwd:
+        lines.append(f"cd {_shell_quote(str(spec.execution.cwd))}")
+
+    if spec.execution.env:
+        for key, value in sorted(spec.execution.env.items()):
+            lines.append(f"export {key}={_shell_quote(value)}")
+
+    payload = _payload_lines(spec, job_dir)
+    if payload:
+        lines.extend(payload)
+    return lines
+
+
+def _payload_lines(spec: JobSpec, job_dir: Path) -> list[str]:
+    cmd = spec.command
+    if cmd.argv is not None:
+        return [" ".join(_shell_quote(a) for a in cmd.argv)]
+    if cmd.command is not None:
+        return [cmd.command]
+    if cmd.script is not None:
+        if cmd.script.variant == "inline":
+            return (cmd.script.text or "").splitlines()
+        if cmd.script.variant == "path":
+            return [f'bash "{job_dir / "user_script.sh"}"']
+    return []
+
+
+def _parse_exit_code(field: str) -> int | None:
+    try:
+        return int(field.split(":")[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def _default_failure_reason(
+    state: JobState, exit_code: int | None, raw_state: str | None = None
+) -> str | None:
+    if state == JobState.SUCCEEDED:
+        return None
+    if state == JobState.CANCELLED:
+        return f"job was cancelled ({raw_state})" if raw_state else "job was cancelled"
+    if state == JobState.TIMED_OUT:
+        return "job exceeded its time limit"
+    if state == JobState.LOST:
+        return "job disappeared from scheduler"
+    if exit_code is not None:
+        return f"job failed with exit code {exit_code}"
+    if raw_state:
+        return f"job failed with scheduler state {raw_state}"
+    return "job failed"
+
+
+def _open_output_handle(path: str | None):
+    if path is None:
+        return None
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    return output_path.open("ab")

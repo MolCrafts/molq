@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from molq.errors import JobNotFoundError, StoreError
-from molq.models import JobRecord, JobSpec
+from molq.models import JobRecord, JobSpec, StatusTransition
 from molq.status import JobState
 
 _SCHEMA_VERSION = "3"
@@ -416,6 +416,25 @@ class JobStore:
 
         rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_record(row) for row in rows]
+
+    def get_transitions(self, job_id: str) -> list[StatusTransition]:
+        """Return the persisted transition timeline for a job."""
+        rows = self._conn.execute(
+            "SELECT job_id, old_state, new_state, timestamp, reason "
+            "FROM status_transitions WHERE job_id = ? "
+            "ORDER BY timestamp ASC, id ASC",
+            (job_id,),
+        ).fetchall()
+        return [
+            StatusTransition(
+                job_id=row["job_id"],
+                old_state=JobState(row["old_state"]) if row["old_state"] else None,
+                new_state=JobState(row["new_state"]),
+                timestamp=row["timestamp"],
+                reason=row["reason"],
+            )
+            for row in rows
+        ]
 
     def _row_to_record(self, row: sqlite3.Row) -> JobRecord:
         state_str = row["state"]
