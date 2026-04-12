@@ -232,6 +232,43 @@ def watch(
 
 
 # ---------------------------------------------------------------------------
+# monitor
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def monitor(
+    all_jobs: Annotated[
+        bool,
+        typer.Option("--all", "-a", help="Include terminal jobs (done/failed/cancelled)."),
+    ] = False,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-n", help="Max number of job rows to display."),
+    ] = 200,
+    refresh: Annotated[
+        float,
+        typer.Option("--refresh", "-r", help="Refresh interval in seconds."),
+    ] = 2.0,
+    db: Annotated[
+        Optional[str],
+        typer.Option("--db", help="Path to molq SQLite database (default: ~/.molq/jobs.db)."),
+    ] = None,
+) -> None:
+    """Open full-screen dashboard for all molq jobs across all clusters."""
+    from molq.dashboard import MolqMonitor
+
+    rprint(f"[dim]Opening monitor… (press q to close)[/dim]")
+    MolqMonitor(
+        db_path=db,
+        include_terminal=all_jobs,
+        limit=limit,
+        refresh_interval=refresh,
+    ).watch()
+    rprint(f"\n[dim]Monitor closed.[/dim]")
+
+
+# ---------------------------------------------------------------------------
 # cancel
 # ---------------------------------------------------------------------------
 

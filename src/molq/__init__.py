@@ -15,6 +15,7 @@ Usage::
     print(record.state)
 """
 
+from molq.dashboard import DashboardState, JobRow, MolqMonitor, RunDashboard
 from molq.errors import (
     CommandError,
     ConfigError,
@@ -45,6 +46,11 @@ from molq.types import (
 )
 
 __all__ = [
+    # Dashboard
+    "RunDashboard",
+    "MolqMonitor",
+    "DashboardState",
+    "JobRow",
     # Core
     "Submitor",
     "JobHandle",

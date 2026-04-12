@@ -302,6 +302,39 @@ class JobStore:
         """Get all non-terminal job records for a cluster."""
         return self.list_records(cluster_name, include_terminal=False)
 
+    def list_all_records(
+        self,
+        include_terminal: bool = False,
+        limit: int | None = None,
+    ) -> list[JobRecord]:
+        """List job records across **all** clusters, ordered by submission time.
+
+        Args:
+            include_terminal: When ``False`` (default), terminal states
+                (succeeded, failed, cancelled, timed_out, lost) are excluded.
+            limit: Cap the result set.  ``None`` returns all matching rows.
+
+        Returns:
+            List of :class:`JobRecord`, newest first.
+        """
+        if include_terminal:
+            sql = "SELECT * FROM jobs ORDER BY submitted_at DESC"
+            params: tuple = ()
+        else:
+            terminal = tuple(s.value for s in JobState if s.is_terminal)
+            placeholders = ",".join("?" for _ in terminal)
+            sql = (
+                f"SELECT * FROM jobs WHERE state NOT IN ({placeholders}) "
+                f"ORDER BY submitted_at DESC"
+            )
+            params = terminal
+
+        if limit is not None:
+            sql += f" LIMIT {int(limit)}"
+
+        rows = self._conn.execute(sql, params).fetchall()
+        return [self._row_to_record(row) for row in rows]
+
     def _row_to_record(self, row: sqlite3.Row) -> JobRecord:
         state_str = row["state"]
         try:

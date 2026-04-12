@@ -249,6 +249,23 @@ class Submitor:
         """Reconcile all active jobs with the scheduler."""
         self._reconciler.reconcile()
 
+    def close(self) -> None:
+        """Release the underlying :class:`JobStore` connection.
+
+        Safe to call multiple times.  After ``close()`` no further methods
+        should be invoked on this Submitor.
+        """
+        store = getattr(self, "_store", None)
+        if store is not None:
+            store.close()
+            self._store = None  # type: ignore[assignment]
+
+    def __enter__(self) -> Submitor:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
