@@ -82,8 +82,14 @@ class JobReconciler:
             if not record.scheduler_job_id:
                 continue
 
-            old_state = record.state
             sid = record.scheduler_job_id
+
+            # Re-read the latest state to avoid trampling concurrent
+            # writes (e.g., a parallel cancel()).
+            current = self._store.get_record(record.job_id)
+            if current is None or current.state.is_terminal:
+                continue
+            old_state = current.state
 
             if sid in scheduler_states:
                 new_state = scheduler_states[sid]
@@ -91,8 +97,10 @@ class JobReconciler:
                 new_state = self._infer_terminal(sid, record.job_id)
 
             if new_state != old_state:
-                self._apply_transition(record.job_id, old_state, new_state, now)
-                changes.append(StatusChange(record.job_id, old_state, new_state, now))
+                if self._apply_transition(record.job_id, old_state, new_state, now):
+                    changes.append(
+                        StatusChange(record.job_id, old_state, new_state, now)
+                    )
 
             # Update last_polled
             self._store.update_job(record.job_id, last_polled=now)
@@ -118,7 +126,11 @@ class JobReconciler:
             new_state = self._infer_terminal(sid, job_id)
 
         if new_state != record.state:
-            self._apply_transition(job_id, record.state, new_state, now)
+            if not self._apply_transition(job_id, record.state, new_state, now):
+                # State changed under us — return the latest authoritative value.
+                latest = self._store.get_record(job_id)
+                if latest is not None:
+                    new_state = latest.state
 
         self._store.update_job(job_id, last_polled=now)
         return new_state
@@ -148,17 +160,28 @@ class JobReconciler:
         old_state: JobState,
         new_state: JobState,
         timestamp: float,
-    ) -> None:
-        """Update store with a state transition."""
-        update_kwargs: dict[str, object] = {"state": new_state}
+    ) -> bool:
+        """Update store with a state transition, atomically.
 
-        if new_state == JobState.RUNNING and not old_state == JobState.RUNNING:
-            update_kwargs["started_at"] = timestamp
-
+        Returns True if the transition was applied, False if the row's state
+        changed under us (e.g. a concurrent cancel()) and the transition was
+        skipped to preserve the authoritative value.
+        """
+        kwargs: dict[str, object] = {}
+        if new_state == JobState.RUNNING and old_state != JobState.RUNNING:
+            kwargs["started_at"] = timestamp
         if new_state.is_terminal:
-            update_kwargs["finished_at"] = timestamp
+            kwargs["finished_at"] = timestamp
 
-        self._store.update_job(job_id, **update_kwargs)
+        applied = self._store.compare_and_update_state(
+            job_id,
+            expected_state=old_state,
+            new_state=new_state,
+            **kwargs,
+        )
+        if not applied:
+            return False
+
         self._store.record_transition(
             job_id,
             old_state=old_state,
@@ -166,6 +189,7 @@ class JobReconciler:
             timestamp=timestamp,
             reason=_describe_transition(old_state, new_state),
         )
+        return True
 
 
 def _describe_transition(old: JobState, new: JobState) -> str:

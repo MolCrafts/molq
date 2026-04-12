@@ -5,8 +5,9 @@ Typer + Rich CLI for submitting, monitoring, and managing jobs
 across local and cluster schedulers.
 """
 
+from contextlib import contextmanager
 from enum import Enum
-from typing import Annotated, Optional
+from typing import Annotated, Iterator, Optional
 
 import typer
 from rich import print as rprint
@@ -30,15 +31,20 @@ class SchedulerType(str, Enum):
     lsf = "lsf"
 
 
-def _create_submitor(
+@contextmanager
+def _open_submitor(
     scheduler: SchedulerType,
     cluster: str | None = None,
-):
-    """Create a Submitor for the CLI."""
+) -> Iterator["Submitor"]:  # type: ignore[name-defined]
+    """Open a Submitor for the CLI and guarantee its connection is closed."""
     from molq import Submitor
 
     cluster_name = cluster or f"cli_{scheduler.value}"
-    return Submitor(cluster_name, scheduler.value)
+    submitor = Submitor(cluster_name, scheduler.value)
+    try:
+        yield submitor
+    finally:
+        submitor.close()
 
 
 # ---------------------------------------------------------------------------
@@ -91,24 +97,24 @@ def submit(
     execution = JobExecution(cwd=workdir, job_name=job_name or "molq_cli_job")
 
     try:
-        submitor = _create_submitor(scheduler, cluster)
-        handle = submitor.submit(
-            argv=cmd,
-            resources=resources,
-            scheduling=scheduling,
-            execution=execution,
-        )
+        with _open_submitor(scheduler, cluster) as submitor:
+            handle = submitor.submit(
+                argv=cmd,
+                resources=resources,
+                scheduling=scheduling,
+                execution=execution,
+            )
 
-        rprint(f"[green]Job submitted[/]")
-        rprint(f"  ID:        {handle.job_id}")
-        rprint(f"  Scheduler: {scheduler.value}")
-        rprint(f"  Command:   {' '.join(cmd)}")
+            rprint(f"[green]Job submitted[/]")
+            rprint(f"  ID:        {handle.job_id}")
+            rprint(f"  Scheduler: {scheduler.value}")
+            rprint(f"  Command:   {' '.join(cmd)}")
 
-        if block:
-            record = handle.wait()
-            rprint(f"  Status:    {record.state.value}")
-        else:
-            rprint(f"  Status:    submitted")
+            if block:
+                record = handle.wait()
+                rprint(f"  Status:    {record.state.value}")
+            else:
+                rprint(f"  Status:    submitted")
 
     except Exception as e:
         console.print(f"[red]Submission failed: {e}[/]")
@@ -129,8 +135,8 @@ def list_jobs(
     all: Annotated[bool, typer.Option("--all", help="Include terminal jobs")] = False,
 ) -> None:
     """List submitted jobs."""
-    submitor = _create_submitor(scheduler, cluster)
-    records = submitor.list(include_terminal=all)
+    with _open_submitor(scheduler, cluster) as submitor:
+        records = submitor.list(include_terminal=all)
 
     if not records:
         rprint("[dim]No jobs found.[/]")
@@ -177,18 +183,19 @@ def status(
     """Get job status."""
     from molq import JobNotFoundError
 
-    submitor = _create_submitor(scheduler, cluster)
-    try:
-        record = submitor.get(job_id)
-        rprint(f"Job {record.job_id}:")
-        rprint(f"  State:   [bold]{record.state.value}[/]")
-        rprint(f"  Type:    {record.command_type}")
-        rprint(f"  Command: {record.command_display}")
-        if record.exit_code is not None:
-            rprint(f"  Exit:    {record.exit_code}")
-    except JobNotFoundError:
-        rprint(f"[yellow]Job {job_id} not found[/]")
-        raise typer.Exit(1)
+    with _open_submitor(scheduler, cluster) as submitor:
+        try:
+            record = submitor.get(job_id)
+        except JobNotFoundError:
+            rprint(f"[yellow]Job {job_id} not found[/]")
+            raise typer.Exit(1)
+
+    rprint(f"Job {record.job_id}:")
+    rprint(f"  State:   [bold]{record.state.value}[/]")
+    rprint(f"  Type:    {record.command_type}")
+    rprint(f"  Command: {record.command_display}")
+    if record.exit_code is not None:
+        rprint(f"  Exit:    {record.exit_code}")
 
 
 # ---------------------------------------------------------------------------
@@ -208,27 +215,27 @@ def watch(
     """Watch a job until completion."""
     from molq import JobNotFoundError
 
-    submitor = _create_submitor(scheduler, cluster)
-    try:
-        record = submitor.get(job_id)
-    except JobNotFoundError:
-        rprint(f"[yellow]Job {job_id} not found[/]")
-        raise typer.Exit(1)
+    with _open_submitor(scheduler, cluster) as submitor:
+        try:
+            record = submitor.get(job_id)
+        except JobNotFoundError:
+            rprint(f"[yellow]Job {job_id} not found[/]")
+            raise typer.Exit(1)
 
-    if record.state.is_terminal:
-        rprint(f"Job {job_id}: [bold]{record.state.value}[/]")
-        return
+        if record.state.is_terminal:
+            rprint(f"Job {job_id}: [bold]{record.state.value}[/]")
+            return
 
-    try:
-        handle_record = submitor._monitor_instance.wait_one(job_id, timeout=timeout)
-        rprint(f"Job {job_id}: [bold]{handle_record.state.value}[/]")
-        if handle_record.exit_code is not None:
-            rprint(f"  Exit code: {handle_record.exit_code}")
-    except TimeoutError:
-        console.print(f"[red]Timeout waiting for job {job_id}[/]")
-        raise typer.Exit(1)
-    except KeyboardInterrupt:
-        rprint("[dim]Interrupted[/]")
+        try:
+            handle_record = submitor._monitor_instance.wait_one(job_id, timeout=timeout)
+            rprint(f"Job {job_id}: [bold]{handle_record.state.value}[/]")
+            if handle_record.exit_code is not None:
+                rprint(f"  Exit code: {handle_record.exit_code}")
+        except TimeoutError:
+            console.print(f"[red]Timeout waiting for job {job_id}[/]")
+            raise typer.Exit(1)
+        except KeyboardInterrupt:
+            rprint("[dim]Interrupted[/]")
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +247,9 @@ def watch(
 def monitor(
     all_jobs: Annotated[
         bool,
-        typer.Option("--all", "-a", help="Include terminal jobs (done/failed/cancelled)."),
+        typer.Option(
+            "--all", "-a", help="Include terminal jobs (done/failed/cancelled)."
+        ),
     ] = False,
     limit: Annotated[
         int,
@@ -252,7 +261,9 @@ def monitor(
     ] = 2.0,
     db: Annotated[
         Optional[str],
-        typer.Option("--db", help="Path to molq SQLite database (default: ~/.molq/jobs.db)."),
+        typer.Option(
+            "--db", help="Path to molq SQLite database (default: ~/.molq/jobs.db)."
+        ),
     ] = None,
 ) -> None:
     """Open full-screen dashboard for all molq jobs across all clusters."""
@@ -284,16 +295,16 @@ def cancel(
     """Cancel a running job."""
     from molq import JobNotFoundError
 
-    submitor = _create_submitor(scheduler, cluster)
-    try:
-        submitor.cancel(job_id)
-        rprint(f"[green]Job {job_id} cancelled[/]")
-    except JobNotFoundError:
-        rprint(f"[yellow]Job {job_id} not found[/]")
-        raise typer.Exit(1)
-    except Exception as e:
-        console.print(f"[red]Cancel failed: {e}[/]")
-        raise typer.Exit(1)
+    with _open_submitor(scheduler, cluster) as submitor:
+        try:
+            submitor.cancel(job_id)
+            rprint(f"[green]Job {job_id} cancelled[/]")
+        except JobNotFoundError:
+            rprint(f"[yellow]Job {job_id} not found[/]")
+            raise typer.Exit(1)
+        except Exception as e:
+            console.print(f"[red]Cancel failed: {e}[/]")
+            raise typer.Exit(1)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ the monitoring loop.
 """
 
 import logging
+import threading
 from collections import defaultdict
 from collections.abc import Callable
 from enum import Enum
@@ -38,6 +39,7 @@ class EventBus:
 
     def __init__(self) -> None:
         self._handlers: dict[EventType, list[Callable]] = defaultdict(list)
+        self._lock = threading.Lock()
 
     def on(self, event: EventType, handler: Callable) -> None:
         """Register a callback for an event type.
@@ -46,7 +48,8 @@ class EventBus:
             event: Event type to listen for.
             handler: Callable that receives the event data.
         """
-        self._handlers[event].append(handler)
+        with self._lock:
+            self._handlers[event].append(handler)
 
     def off(self, event: EventType, handler: Callable) -> None:
         """Remove a previously registered callback.
@@ -55,8 +58,9 @@ class EventBus:
             event: Event type.
             handler: The handler to remove.
         """
-        handlers = self._handlers.get(event, [])
-        self._handlers[event] = [h for h in handlers if h is not handler]
+        with self._lock:
+            handlers = self._handlers.get(event, [])
+            self._handlers[event] = [h for h in handlers if h is not handler]
 
     def emit(self, event: EventType, data: Any = None) -> None:
         """Dispatch an event to all registered handlers.
@@ -65,10 +69,17 @@ class EventBus:
             event: Event type to emit.
             data: Event payload (StatusChange, JobRecord, or None).
         """
-        for handler in self._handlers.get(event, []):
+        # Snapshot the handler list under the lock, then dispatch outside it
+        # so that handlers may freely on()/off() without deadlocking or
+        # mutating the list we are iterating.
+        with self._lock:
+            handlers = list(self._handlers.get(event, []))
+        for handler in handlers:
             try:
                 handler(data)
             except Exception:
                 logger.exception(
-                    "Handler %s failed for event %s", handler.__name__, event
+                    "Handler %s failed for event %s",
+                    getattr(handler, "__name__", repr(handler)),
+                    event,
                 )

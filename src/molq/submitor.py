@@ -266,6 +266,14 @@ class Submitor:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.close()
 
+    def __del__(self) -> None:
+        # Last-resort cleanup: keeps sqlite from emitting ResourceWarning
+        # if the user neglected to close()/use a context manager.
+        try:
+            self.close()
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------

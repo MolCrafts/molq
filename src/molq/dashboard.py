@@ -37,7 +37,6 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskProgressC
 from rich.table import Table
 from rich.text import Text
 
-
 # ── Data models ──────────────────────────────────────────────────────────────
 
 
@@ -70,38 +69,38 @@ class DashboardState:
     """Immutable snapshot passed to :class:`RunDashboard` on every tick."""
 
     title: str
-    overall_status: str   # "running" | "pending" | "done" | "failed" | "mixed"
+    overall_status: str  # "running" | "pending" | "done" | "failed" | "mixed"
     total: int
     running: int
     pending: int
     done: int
     failed: int
-    updated_at: str       # e.g. "14:32:07"
+    updated_at: str  # e.g. "14:32:07"
     jobs: tuple[JobRow, ...] = ()
 
 
 # ── Style maps ────────────────────────────────────────────────────────────────
 
 _STATE_STYLE: dict[str, str] = {
-    "running":   "bold cyan",
-    "pending":   "yellow",
-    "done":      "bold green",
+    "running": "bold cyan",
+    "pending": "yellow",
+    "done": "bold green",
     "succeeded": "bold green",
-    "dry_run":   "dim",
-    "failed":    "bold red",
+    "dry_run": "dim",
+    "failed": "bold red",
     "cancelled": "dim",
     "timed_out": "bold red",
-    "lost":      "bold red",
-    "mixed":     "bold yellow",
+    "lost": "bold red",
+    "mixed": "bold yellow",
 }
 
 _STATUS_ICON: dict[str, str] = {
-    "running":  "⟳",
-    "pending":  "·",
-    "done":     "✓",
-    "succeeded":"✓",
-    "failed":   "✗",
-    "mixed":    "~",
+    "running": "⟳",
+    "pending": "·",
+    "done": "✓",
+    "succeeded": "✓",
+    "failed": "✗",
+    "mixed": "~",
 }
 
 
@@ -112,10 +111,10 @@ class _UIState:
     """Thread-safe navigation state for the dashboard."""
 
     def __init__(self) -> None:
-        self._lock     = threading.Lock()
+        self._lock = threading.Lock()
         self._selected = 0
-        self._detail   = False
-        self._total    = 0
+        self._detail = False
+        self._total = 0
 
     @property
     def selected(self) -> int:
@@ -153,7 +152,7 @@ class _UIState:
             self._total = total
             if total == 0:
                 self._selected = 0
-                self._detail   = False
+                self._detail = False
             elif self._selected >= total:
                 self._selected = total - 1
 
@@ -200,10 +199,10 @@ class RunDashboard:
             refresh_interval: Seconds between data refreshes.
         """
         stop = threading.Event()
-        ui   = _UIState()
+        ui = _UIState()
 
         def _key_reader() -> None:
-            fd    = sys.stdin.fileno()
+            fd = sys.stdin.fileno()
             saved = None
             try:
                 saved = termios.tcgetattr(fd)
@@ -214,14 +213,14 @@ class RunDashboard:
                         continue
                     ch = sys.stdin.read(1)
 
-                    if ch in ("q", "Q", "\x03"):      # quit
+                    if ch in ("q", "Q", "\x03"):  # quit
                         stop.set()
                         break
 
-                    elif ch == "\x1b":                # escape sequence or bare Esc
+                    elif ch == "\x1b":  # escape sequence or bare Esc
                         r2, _, _ = select.select([sys.stdin], [], [], 0.05)
                         if not r2:
-                            ui.exit_detail()          # bare Esc → back to list
+                            ui.exit_detail()  # bare Esc → back to list
                             continue
                         ch2 = sys.stdin.read(1)
                         if ch2 != "[":
@@ -230,12 +229,12 @@ class RunDashboard:
                         if not r3:
                             continue
                         ch3 = sys.stdin.read(1)
-                        if ch3 == "A":                # ↑
+                        if ch3 == "A":  # ↑
                             ui.move_up()
-                        elif ch3 == "B":              # ↓
+                        elif ch3 == "B":  # ↓
                             ui.move_down()
 
-                    elif ch in ("\r", "\n"):          # Enter → toggle detail
+                    elif ch in ("\r", "\n"):  # Enter → toggle detail
                         ui.toggle_detail()
 
             finally:
@@ -265,17 +264,29 @@ class RunDashboard:
                     time.sleep(0.05)
         finally:
             stop.set()
-            key_thread.join(timeout=1.0)
+            # Give the key reader a chance to restore termios state.  The
+            # reader polls stdin every 100 ms so a few hundred ms is plenty,
+            # but allow a little extra slack on slow hosts.
+            key_thread.join(timeout=2.0)
+            if key_thread.is_alive():
+                # Last-resort: forcibly restore the terminal so the user does
+                # not end up in raw/cbreak mode after Ctrl-C.
+                try:
+                    fd = sys.stdin.fileno()
+                    saved_attrs = termios.tcgetattr(fd)
+                    termios.tcsetattr(fd, termios.TCSADRAIN, saved_attrs)
+                except Exception:
+                    pass
 
     # ── Rendering ─────────────────────────────────────────────────────────
 
     def _render(self, state: DashboardState, ui: _UIState) -> Layout:
         layout = Layout()
         layout.split_column(
-            Layout(name="header",   size=3),
+            Layout(name="header", size=3),
             Layout(name="overview", size=4),
             Layout(name="main"),
-            Layout(name="footer",   size=1),
+            Layout(name="footer", size=1),
         )
         layout["header"].update(self._render_header(state))
         layout["overview"].update(self._render_overview(state))
@@ -290,7 +301,7 @@ class RunDashboard:
         return layout
 
     def _render_header(self, state: DashboardState) -> Panel:
-        icon  = _STATUS_ICON.get(state.overall_status, "·")
+        icon = _STATUS_ICON.get(state.overall_status, "·")
         style = _STATE_STYLE.get(state.overall_status, "white")
         badge = style.replace("bold ", "")
 
@@ -309,15 +320,15 @@ class RunDashboard:
             stats.append(str(count), style=f"bold {style}")
             stats.append(f" {label}", style="dim")
 
-        _seg(state.total,   "total",   "white")
+        _seg(state.total, "total", "white")
         stats.append("   ")
         _seg(state.running, "running", "cyan")
         stats.append("   ")
         _seg(state.pending, "pending", "yellow")
         stats.append("   ")
-        _seg(state.done,    "done",    "green")
+        _seg(state.done, "done", "green")
         stats.append("   ")
-        _seg(state.failed,  "failed",  "red")
+        _seg(state.failed, "failed", "red")
 
         prog = Progress(
             BarColumn(bar_width=None),
@@ -325,7 +336,9 @@ class RunDashboard:
             TaskProgressColumn(),
             expand=True,
         )
-        prog.add_task("", total=max(state.total, 1), completed=state.done + state.failed)
+        prog.add_task(
+            "", total=max(state.total, 1), completed=state.done + state.failed
+        )
 
         return Panel(Group(stats, prog), title="[bold]Overview[/bold]", padding=(0, 2))
 
@@ -338,32 +351,33 @@ class RunDashboard:
             expand=True,
             padding=(0, 2),
         )
-        table.add_column("STATE",    width=13, no_wrap=True, justify="left")
-        table.add_column("JOB ID",   ratio=3,  no_wrap=True, justify="left")
-        table.add_column("CLUSTER",  ratio=2,  no_wrap=True, justify="left")
-        table.add_column("SCHED ID", ratio=2,  no_wrap=True, justify="left")
-        table.add_column("ELAPSED",  width=10, no_wrap=True, justify="left")
-        table.add_column("NOTE",     ratio=3,  justify="left")
+        table.add_column("STATE", width=13, no_wrap=True, justify="left")
+        table.add_column("JOB ID", ratio=3, no_wrap=True, justify="left")
+        table.add_column("CLUSTER", ratio=2, no_wrap=True, justify="left")
+        table.add_column("SCHED ID", ratio=2, no_wrap=True, justify="left")
+        table.add_column("ELAPSED", width=10, no_wrap=True, justify="left")
+        table.add_column("NOTE", ratio=3, justify="left")
 
         for i, job in enumerate(state.jobs):
-            style     = _STATE_STYLE.get(job.state.lower(), "white")
-            is_sel    = (i == selected)
+            style = _STATE_STYLE.get(job.state.lower(), "white")
+            is_sel = i == selected
             row_style = "on grey19" if is_sel else ""
-            marker    = "▶ " if is_sel else "  "
+            marker = "▶ " if is_sel else "  "
 
             table.add_row(
                 Text(marker + job.state.upper(), style=style),
-                Text(job.run_id,              style="white"),
-                Text(job.cluster or "—",      style="dim"),
+                Text(job.run_id, style="white"),
+                Text(job.cluster or "—", style="dim"),
                 Text(job.scheduler_id or "—", style="dim"),
-                Text(job.elapsed or "—",      style="dim"),
-                Text(job.message or "",       style="dim"),
+                Text(job.elapsed or "—", style="dim"),
+                Text(job.message or "", style="dim"),
                 style=row_style,
             )
 
         if not state.jobs:
             table.add_row(
-                Text("—", style="dim"), Text("no jobs", style="dim"),
+                Text("—", style="dim"),
+                Text("no jobs", style="dim"),
                 *[Text("", style="dim")] * 4,
             )
 
@@ -379,16 +393,16 @@ class RunDashboard:
         def _kv(key: str, val: str, val_style: str = "white") -> None:
             grid.add_row(key, Text(val, style=val_style))
 
-        _kv("state",    job.state.upper(), state_style)
-        _kv("job id",   job.run_id)
+        _kv("state", job.state.upper(), state_style)
+        _kv("job id", job.run_id)
         if job.cluster:
-            _kv("cluster",  job.cluster)
+            _kv("cluster", job.cluster)
         if job.scheduler_id:
             _kv("sched id", job.scheduler_id)
         if job.elapsed:
-            _kv("elapsed",  job.elapsed)
+            _kv("elapsed", job.elapsed)
         if job.message:
-            _kv("note",     job.message, "bold red")
+            _kv("note", job.message, "bold red")
         for key, val in job.extras:
             _kv(key, val)
 
@@ -409,14 +423,17 @@ class RunDashboard:
 # ── Helpers for MolqMonitor ───────────────────────────────────────────────────
 
 
-def _elapsed_ts(submitted_at: float | None, finished_at: float | None = None) -> str | None:
+def _elapsed_ts(
+    submitted_at: float | None, finished_at: float | None = None
+) -> str | None:
     """Compute elapsed time from UNIX epoch timestamps."""
     if submitted_at is None:
         return None
     from datetime import datetime
+
     start = datetime.fromtimestamp(submitted_at)
-    end   = datetime.fromtimestamp(finished_at) if finished_at else datetime.now()
-    secs  = max(0, int((end - start).total_seconds()))
+    end = datetime.fromtimestamp(finished_at) if finished_at else datetime.now()
+    secs = max(0, int((end - start).total_seconds()))
     if secs < 60:
         return f"{secs}s"
     m, s = divmod(secs, 60)
@@ -461,25 +478,36 @@ class MolqMonitor:
         limit: int = 200,
         refresh_interval: float = 2.0,
     ) -> None:
-        self._db_path          = db_path
+        self._db_path = db_path
         self._include_terminal = include_terminal
-        self._limit            = limit
+        self._limit = limit
         self._refresh_interval = refresh_interval
 
     def watch(self) -> None:
         """Open the full-screen dashboard and block until ``q`` is pressed."""
-        from datetime import datetime
-
-        from molq.status import JobState
         from molq.store import JobStore
 
         store = JobStore(self._db_path)
+        try:
+            self._run_dashboard(store)
+        finally:
+            store.close()
 
-        _TERMINAL = frozenset({
-            JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED,
-            JobState.TIMED_OUT, JobState.LOST,
-        })
-        _ACTIVE  = frozenset({JobState.RUNNING})
+    def _run_dashboard(self, store: object) -> None:
+        from datetime import datetime
+
+        from molq.status import JobState
+
+        _TERMINAL = frozenset(
+            {
+                JobState.SUCCEEDED,
+                JobState.FAILED,
+                JobState.CANCELLED,
+                JobState.TIMED_OUT,
+                JobState.LOST,
+            }
+        )
+        _ACTIVE = frozenset({JobState.RUNNING})
         _PENDING = frozenset({JobState.CREATED, JobState.SUBMITTED, JobState.QUEUED})
 
         def _build_state() -> DashboardState:
@@ -496,9 +524,9 @@ class MolqMonitor:
                 # Build extras for the detail view
                 extras: list[tuple[str, str]] = [
                     ("scheduler", rec.scheduler),
-                    ("command",   rec.command_display),
-                    ("cwd",       rec.cwd),
-                    ("full id",   rec.job_id),
+                    ("command", rec.command_display),
+                    ("cwd", rec.cwd),
+                    ("full id", rec.job_id),
                 ]
                 if rec.exit_code is not None:
                     extras.append(("exit code", str(rec.exit_code)))
@@ -506,15 +534,17 @@ class MolqMonitor:
                     for k, v in rec.metadata.items():
                         extras.append((k, str(v)))
 
-                rows.append(JobRow(
-                    state=rec.state.value,
-                    run_id=rec.job_id[:16],
-                    cluster=rec.cluster_name,
-                    scheduler_id=rec.scheduler_job_id,
-                    elapsed=elapsed,
-                    message=rec.failure_reason,
-                    extras=tuple(extras),
-                ))
+                rows.append(
+                    JobRow(
+                        state=rec.state.value,
+                        run_id=rec.job_id[:16],
+                        cluster=rec.cluster_name,
+                        scheduler_id=rec.scheduler_job_id,
+                        elapsed=elapsed,
+                        message=rec.failure_reason,
+                        extras=tuple(extras),
+                    )
+                )
 
                 if rec.state in _ACTIVE:
                     running += 1

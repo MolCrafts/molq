@@ -51,7 +51,7 @@ class TestSchemaCreation:
         row = memory_store._conn.execute(
             "SELECT value FROM molq_meta WHERE key = 'schema_version'"
         ).fetchone()
-        assert row["value"] == "2"
+        assert row["value"] == "3"
 
     def test_file_backed(self, file_store: JobStore):
         assert isinstance(file_store.db_path, Path)

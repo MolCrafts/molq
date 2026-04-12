@@ -6,15 +6,19 @@ Internal module — users interact through Submitor, not directly with Scheduler
 from __future__ import annotations
 
 import getpass
+import logging
 import os
 import re
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
+
+logger = logging.getLogger(__name__)
 
 from molq.errors import SchedulerError
 from molq.models import JobSpec
@@ -58,21 +62,31 @@ class Scheduler(Protocol):
 
 
 class LocalScheduler:
-    """Execute jobs as local subprocesses."""
+    """Execute jobs as local subprocesses.
+
+    Each spawned process runs in its own session (``start_new_session=True``)
+    so that signal-based cancellation can target the entire process group.
+    A background reaper thread ``wait()``s every handle to make sure no
+    completed job is left as a zombie attached to this process.
+    """
 
     def __init__(self, options: LocalSchedulerOptions | None = None) -> None:
         self._opts = options or LocalSchedulerOptions()
+        self._procs: dict[int, subprocess.Popen] = {}
+        self._procs_lock = threading.Lock()
 
     def submit(self, spec: JobSpec, job_dir: Path) -> str:
         script_path = self._materialize_script(spec, job_dir)
         exit_code_path = job_dir / ".exit_code"
 
-        # Wrapper that records exit code
+        # Wrapper that records exit code.  fsync after writing so the bytes
+        # are durable on disk before bash tries to interpret them — matters on
+        # NFS / slow disks where the kernel buffer hasn't flushed yet.
         wrapper_path = job_dir / "_wrapper.sh"
-        wrapper_path.write_text(
-            f"#!/bin/bash\n" f'bash "{script_path}"\n' f'echo $? > "{exit_code_path}"\n'
+        _atomic_write_script(
+            wrapper_path,
+            f'#!/bin/bash\nbash "{script_path}"\necho $? > "{exit_code_path}"\n',
         )
-        wrapper_path.chmod(0o700)
 
         cwd = spec.execution.cwd or spec.cwd
         env = None
@@ -88,7 +102,25 @@ class LocalScheduler:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        self._track(proc)
         return str(proc.pid)
+
+    def _track(self, proc: subprocess.Popen) -> None:
+        """Hold a reference to the Popen and reap it when it exits."""
+        with self._procs_lock:
+            self._procs[proc.pid] = proc
+
+        def _reap() -> None:
+            try:
+                proc.wait()
+            except Exception:
+                logger.debug("reaper failed for pid=%s", proc.pid, exc_info=True)
+            finally:
+                with self._procs_lock:
+                    self._procs.pop(proc.pid, None)
+
+        t = threading.Thread(target=_reap, name=f"molq-reaper-{proc.pid}", daemon=True)
+        t.start()
 
     def poll_many(self, scheduler_job_ids: Sequence[str]) -> dict[str, JobState]:
         result: dict[str, JobState] = {}
@@ -107,16 +139,32 @@ class LocalScheduler:
     def cancel(self, scheduler_job_id: str) -> None:
         try:
             pid = int(scheduler_job_id)
-            os.kill(pid, signal.SIGTERM)
-            # Grace period
-            time.sleep(0.1)
+        except ValueError:
+            return
+        # Signal the whole session (negative pid) so children die too.
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                return
+
+        # Brief grace period, then SIGKILL whatever is left.
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
             try:
                 os.kill(pid, 0)
-                os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
+                return
+            time.sleep(0.02)
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
                 pass
-        except (ProcessLookupError, ValueError, PermissionError):
-            pass
 
     def resolve_terminal(self, scheduler_job_id: str) -> JobState | None:
         # We cannot determine exit code without the job_dir here.
@@ -142,17 +190,16 @@ class LocalScheduler:
 
         if cmd.script is not None:
             if cmd.script.variant == "inline":
-                script_path.write_text(f"#!/bin/bash\n{cmd.script.text}\n")
+                _atomic_write_script(script_path, f"#!/bin/bash\n{cmd.script.text}\n")
             elif cmd.script.variant == "path" and cmd.script.file_path:
                 shutil.copy2(cmd.script.file_path, script_path)
+                script_path.chmod(0o700)
         elif cmd.argv is not None:
-            # Build a script that preserves argument boundaries
             args_escaped = " ".join(_shell_quote(a) for a in cmd.argv)
-            script_path.write_text(f"#!/bin/bash\n{args_escaped}\n")
+            _atomic_write_script(script_path, f"#!/bin/bash\n{args_escaped}\n")
         elif cmd.command is not None:
-            script_path.write_text(f"#!/bin/bash\n{cmd.command}\n")
+            _atomic_write_script(script_path, f"#!/bin/bash\n{cmd.command}\n")
 
-        script_path.chmod(0o700)
         return script_path
 
 
@@ -241,7 +288,11 @@ class SlurmScheduler:
                     if state is not None:
                         result[jid] = state
             return result
-        except (subprocess.TimeoutExpired, OSError):
+        except subprocess.TimeoutExpired:
+            logger.warning("squeue timed out for ids=%s", ids_str)
+            return {}
+        except OSError as e:
+            logger.error("squeue invocation failed: %s", e)
             return {}
 
     def cancel(self, scheduler_job_id: str) -> None:
@@ -418,7 +469,11 @@ class PBSScheduler:
                     if state is not None:
                         result[jid] = state
             return result
-        except (subprocess.TimeoutExpired, OSError):
+        except subprocess.TimeoutExpired:
+            logger.warning("qstat timed out (user=%s)", user)
+            return {}
+        except OSError as e:
+            logger.error("qstat invocation failed: %s", e)
             return {}
 
     def cancel(self, scheduler_job_id: str) -> None:
@@ -593,7 +648,11 @@ class LSFScheduler:
                     if state is not None:
                         result[jid] = state
             return result
-        except (subprocess.TimeoutExpired, OSError):
+        except subprocess.TimeoutExpired:
+            logger.warning("bjobs timed out for ids=%s", scheduler_job_ids)
+            return {}
+        except OSError as e:
+            logger.error("bjobs invocation failed: %s", e)
             return {}
 
     def cancel(self, scheduler_job_id: str) -> None:
@@ -722,3 +781,19 @@ def _shell_quote(s: str) -> str:
     if re.match(r"^[a-zA-Z0-9_/.\-=:@]+$", s):
         return s
     return "'" + s.replace("'", "'\"'\"'") + "'"
+
+
+def _atomic_write_script(path: Path, content: str) -> None:
+    """Write a shell script and ``fsync`` it before chmod.
+
+    Without ``fsync`` the contents may still sit in the page cache when bash
+    is exec'd against the file — usually fine on a local SSD, but on NFS or
+    a slow disk under heavy concurrency this can lead to bash seeing an
+    empty script.
+    """
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(str(path), 0o700)

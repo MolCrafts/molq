@@ -53,7 +53,7 @@ class JobMonitor:
         poll_count = 0
 
         try:
-            while not self._stop.is_set():
+            while True:
                 state = self._reconciler.reconcile_one(job_id)
 
                 if state is not None and JobState(state).is_terminal:
@@ -68,7 +68,10 @@ class JobMonitor:
                     )
 
                 interval = self._strategy.next_interval(time.time() - start, poll_count)
-                self._stop.wait(interval)
+                # wait() returns True iff the event was set during the wait,
+                # so we observe stop() promptly without a check-then-wait race.
+                if self._stop.wait(interval):
+                    break
                 poll_count += 1
 
         except KeyboardInterrupt:
@@ -101,7 +104,7 @@ class JobMonitor:
         poll_count = 0
 
         try:
-            while not self._stop.is_set():
+            while True:
                 self._reconciler.reconcile()
 
                 if job_ids is not None:
@@ -123,7 +126,8 @@ class JobMonitor:
                     )
 
                 interval = self._strategy.next_interval(time.time() - start, poll_count)
-                self._stop.wait(interval)
+                if self._stop.wait(interval):
+                    break
                 poll_count += 1
 
         except KeyboardInterrupt:

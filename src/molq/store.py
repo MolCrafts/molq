@@ -17,7 +17,7 @@ from molq.errors import JobNotFoundError, StoreError
 from molq.models import JobRecord, JobSpec
 from molq.status import JobState
 
-_SCHEMA_VERSION = "2"
+_SCHEMA_VERSION = "3"
 
 _CREATE_META = """
 CREATE TABLE IF NOT EXISTS molq_meta (
@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS molq_meta (
 )
 """
 
+# v3: dropped UNIQUE(cluster_name, scheduler_job_id).  job_id (UUID) already
+# guarantees row identity, and OS-level PID reuse used to make the constraint
+# fire spuriously when the LocalScheduler reused a freed PID.
 _CREATE_JOBS = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id TEXT PRIMARY KEY,
@@ -42,8 +45,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_polled REAL,
     exit_code INTEGER,
     failure_reason TEXT,
-    metadata TEXT DEFAULT '{}',
-    UNIQUE(cluster_name, scheduler_job_id)
+    metadata TEXT DEFAULT '{}'
 )
 """
 
@@ -84,9 +86,10 @@ class JobStore:
             db_path = molq_dir / "jobs.db"
 
         self.db_path = Path(db_path) if db_path != ":memory:" else db_path
-        self._write_lock = threading.Lock()
+        self._write_lock = threading.RLock()
         self._conn = self._open_connection()
-        self._ensure_schema()
+        with self._write_lock:
+            self._ensure_schema()
 
     def _open_connection(self) -> sqlite3.Connection:
         path = str(self.db_path)
@@ -111,6 +114,10 @@ class JobStore:
                         f"supported version {_SCHEMA_VERSION}. "
                         f"Please upgrade molq."
                     )
+                if version == "2":
+                    self._migrate_v2_to_v3()
+                    return
+                raise StoreError(f"Unknown schema version {version!r}; cannot migrate.")
         except sqlite3.OperationalError:
             # molq_meta table does not exist
             if self._has_old_schema():
@@ -131,20 +138,56 @@ class JobStore:
             return False
 
     def _migrate_from_v1(self) -> None:
-        """Back up v1 database and create fresh v2 schema."""
+        """Back up v1 database and create fresh v3 schema."""
         self._conn.close()
 
         if isinstance(self.db_path, Path):
             backup_path = self.db_path.with_suffix(".db.v1.bak")
             self.db_path.rename(backup_path)
             print(
-                f"molq: migrated database to v2, "
+                f"molq: migrated database to v{_SCHEMA_VERSION}, "
                 f"old data backed up to {backup_path}",
                 file=sys.stderr,
             )
 
         self._conn = self._open_connection()
         self._create_schema()
+
+    def _migrate_v2_to_v3(self) -> None:
+        """Drop the legacy ``UNIQUE(cluster_name, scheduler_job_id)`` constraint.
+
+        SQLite cannot drop table constraints in place, so we recreate the
+        ``jobs`` table without the constraint and copy rows over.  The whole
+        operation runs inside a single transaction so concurrent readers
+        always observe a consistent snapshot.
+        """
+        with self._write_lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute("ALTER TABLE jobs RENAME TO _jobs_v2_old")
+                self._conn.execute(_CREATE_JOBS)
+                self._conn.execute(
+                    "INSERT INTO jobs ("
+                    "job_id, cluster_name, scheduler, scheduler_job_id, "
+                    "state, command_type, command_display, cwd, "
+                    "submitted_at, started_at, finished_at, last_polled, "
+                    "exit_code, failure_reason, metadata) "
+                    "SELECT job_id, cluster_name, scheduler, scheduler_job_id, "
+                    "state, command_type, command_display, cwd, "
+                    "submitted_at, started_at, finished_at, last_polled, "
+                    "exit_code, failure_reason, metadata "
+                    "FROM _jobs_v2_old"
+                )
+                self._conn.execute("DROP TABLE _jobs_v2_old")
+                self._conn.execute(_CREATE_IDX_CLUSTER_STATE)
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO molq_meta (key, value) VALUES (?, ?)",
+                    ("schema_version", _SCHEMA_VERSION),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def _create_schema(self) -> None:
         """Create all tables and indexes for the v2 schema."""
@@ -159,6 +202,45 @@ class JobStore:
             self._conn.execute(_CREATE_IDX_CLUSTER_STATE)
             self._conn.execute(_CREATE_IDX_TRANSITIONS)
             self._conn.commit()
+
+    def compare_and_update_state(
+        self,
+        job_id: str,
+        expected_state: JobState,
+        new_state: JobState,
+        *,
+        started_at: float | None = None,
+        finished_at: float | None = None,
+        last_polled: float | None = None,
+        exit_code: int | None = None,
+        failure_reason: str | None = None,
+    ) -> bool:
+        """Atomically update state iff current state matches ``expected_state``.
+
+        Returns True if the row was updated, False if the precondition failed.
+        """
+        fields: list[str] = ["state = ?"]
+        values: list[object] = [new_state.value]
+
+        extras = {
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "last_polled": last_polled,
+            "exit_code": exit_code,
+            "failure_reason": failure_reason,
+        }
+        for col, val in extras.items():
+            if val is not None:
+                fields.append(f"{col} = ?")
+                values.append(val)
+
+        values.extend([job_id, expected_state.value])
+        sql = f"UPDATE jobs SET {', '.join(fields)} " "WHERE job_id = ? AND state = ?"
+
+        with self._write_lock:
+            cur = self._conn.execute(sql, tuple(values))
+            self._conn.commit()
+            return cur.rowcount > 0
 
     # ------------------------------------------------------------------
     # Write operations
@@ -360,5 +442,21 @@ class JobStore:
         )
 
     def close(self) -> None:
-        """Close the database connection."""
-        self._conn.close()
+        """Close the database connection.  Idempotent."""
+        conn = getattr(self, "_conn", None)
+        if conn is None:
+            return
+        try:
+            conn.close()
+        finally:
+            self._conn = None  # type: ignore[assignment]
+
+    def __del__(self) -> None:
+        # Finalizer guard: if the user forgot to call close(), at least
+        # silence the sqlite3 ResourceWarning instead of leaking the FD.
+        # Module-level state may already be torn down at interpreter
+        # shutdown, so swallow everything.
+        try:
+            self.close()
+        except Exception:
+            pass

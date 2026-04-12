@@ -20,7 +20,7 @@ def mock_submitor():
 
 
 class TestSubmitCommand:
-    @patch("molq.cli.main._create_submitor")
+    @patch("molq.cli.main._open_submitor")
     def test_submit_basic(self, mock_create):
         handle = MagicMock()
         handle.job_id = "test-id"
@@ -28,7 +28,7 @@ class TestSubmitCommand:
 
         mock_submitor = MagicMock()
         mock_submitor.submit.return_value = handle
-        mock_create.return_value = mock_submitor
+        mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["submit", "local", "echo", "hello"])
         assert result.exit_code == 0
@@ -40,17 +40,17 @@ class TestSubmitCommand:
 
 
 class TestListCommand:
-    @patch("molq.cli.main._create_submitor")
+    @patch("molq.cli.main._open_submitor")
     def test_list_empty(self, mock_create):
         mock_submitor = MagicMock()
         mock_submitor.list.return_value = []
-        mock_create.return_value = mock_submitor
+        mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["list", "local"])
         assert result.exit_code == 0
         assert "No jobs" in result.output
 
-    @patch("molq.cli.main._create_submitor")
+    @patch("molq.cli.main._open_submitor")
     def test_list_with_jobs(self, mock_create):
         record = JobRecord(
             job_id="abc-123",
@@ -62,7 +62,7 @@ class TestListCommand:
         )
         mock_submitor = MagicMock()
         mock_submitor.list.return_value = [record]
-        mock_create.return_value = mock_submitor
+        mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["list", "local"])
         assert result.exit_code == 0
@@ -70,7 +70,7 @@ class TestListCommand:
 
 
 class TestStatusCommand:
-    @patch("molq.cli.main._create_submitor")
+    @patch("molq.cli.main._open_submitor")
     def test_status_found(self, mock_create):
         record = JobRecord(
             job_id="abc-123",
@@ -82,19 +82,19 @@ class TestStatusCommand:
         )
         mock_submitor = MagicMock()
         mock_submitor.get.return_value = record
-        mock_create.return_value = mock_submitor
+        mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["status", "abc-123", "local"])
         assert result.exit_code == 0
         assert "running" in result.output
 
-    @patch("molq.cli.main._create_submitor")
+    @patch("molq.cli.main._open_submitor")
     def test_status_not_found(self, mock_create):
         from molq.errors import JobNotFoundError
 
         mock_submitor = MagicMock()
         mock_submitor.get.side_effect = JobNotFoundError("abc")
-        mock_create.return_value = mock_submitor
+        mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["status", "abc", "local"])
         assert result.exit_code == 1
@@ -102,22 +102,22 @@ class TestStatusCommand:
 
 
 class TestCancelCommand:
-    @patch("molq.cli.main._create_submitor")
+    @patch("molq.cli.main._open_submitor")
     def test_cancel_success(self, mock_create):
         mock_submitor = MagicMock()
-        mock_create.return_value = mock_submitor
+        mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["cancel", "abc-123", "local"])
         assert result.exit_code == 0
         assert "cancelled" in result.output
 
-    @patch("molq.cli.main._create_submitor")
+    @patch("molq.cli.main._open_submitor")
     def test_cancel_not_found(self, mock_create):
         from molq.errors import JobNotFoundError
 
         mock_submitor = MagicMock()
         mock_submitor.cancel.side_effect = JobNotFoundError("abc")
-        mock_create.return_value = mock_submitor
+        mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["cancel", "abc", "local"])
         assert result.exit_code == 1
