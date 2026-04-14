@@ -459,7 +459,7 @@ def logs(
 
 @app.command()
 def watch(
-    job_id: Annotated[str, typer.Argument(help="Job ID to watch")],
+    job_id: Annotated[str | None, typer.Argument(help="Job ID to watch")] = None,
     scheduler: Annotated[
         SchedulerType, typer.Argument(help="Scheduler")
     ] = SchedulerType.local,
@@ -467,11 +467,61 @@ def watch(
     profile: Annotated[str | None, typer.Option(help="Profile name")] = None,
     config: Annotated[str | None, typer.Option(help="Path to config.toml")] = None,
     timeout: Annotated[float | None, typer.Option(help="Max seconds")] = None,
+    all_jobs: Annotated[
+        bool,
+        typer.Option("--all", "-a", help="Watch all active jobs in this namespace"),
+    ] = False,
 ) -> None:
-    """Watch a job until completion."""
+    """Watch a job (or all active jobs with --all) until completion."""
     from molq import JobNotFoundError
+    from molq.errors import MolqTimeoutError
+
+    if all_jobs and job_id is not None:
+        console.print("[red]Cannot combine --all with a job ID[/]")
+        raise typer.Exit(1)
+    if not all_jobs and job_id is None:
+        console.print("[red]Provide a job ID or use --all[/]")
+        raise typer.Exit(1)
 
     with _open_submitor(scheduler, cluster, profile, config) as submitor:
+        if all_jobs:
+            submitor.refresh()
+            active = [r for r in submitor.list(include_terminal=False)]
+            if not active:
+                rprint("[dim]No active jobs.[/]")
+                return
+            rprint(f"[dim]Watching {len(active)} active job(s)…[/]")
+            try:
+                records = submitor.watch(None, timeout=timeout)
+            except MolqTimeoutError:
+                console.print("[red]Timeout waiting for jobs[/]")
+                raise typer.Exit(1)
+            except KeyboardInterrupt:
+                rprint("[dim]Interrupted[/]")
+                return
+
+            watched_ids = {r.job_id for r in active}
+            table = Table(title="Watched Jobs")
+            table.add_column("Job ID", style="cyan", max_width=36)
+            table.add_column("State", style="bold")
+            table.add_column("Exit")
+            table.add_column("Command", max_width=40)
+            for r in records:
+                if r.job_id not in watched_ids:
+                    continue
+                style = _state_style(r.state.value)
+                state_value = (
+                    f"[{style}]{r.state.value}[/{style}]" if style else r.state.value
+                )
+                table.add_row(
+                    r.job_id[:12] + "...",
+                    state_value,
+                    "-" if r.exit_code is None else str(r.exit_code),
+                    r.command_display[:40],
+                )
+            rprint(table)
+            return
+
         try:
             record = submitor.get(job_id)
         except JobNotFoundError:
@@ -487,7 +537,7 @@ def watch(
             rprint(f"Job {job_id}: [bold]{handle_record.state.value}[/]")
             if handle_record.exit_code is not None:
                 rprint(f"  Exit code: {handle_record.exit_code}")
-        except TimeoutError:
+        except MolqTimeoutError:
             console.print(f"[red]Timeout waiting for job {job_id}[/]")
             raise typer.Exit(1)
         except KeyboardInterrupt:
