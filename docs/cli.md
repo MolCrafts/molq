@@ -154,6 +154,10 @@ Behavior:
 
 Print captured stdout or stderr.
 
+By default, these artifact files are created under the submission working
+directory at `.molq/jobs/<job-id>/` unless you override `jobs_dir`,
+`output_file`, or `error_file`.
+
 ```bash
 molq logs JOB_ID [SCHEDULER] [OPTIONS]
 ```

@@ -45,7 +45,8 @@ assert record.state.value == "succeeded"
 - Cleanup and lightweight daemon workflows for retention and reconciliation
 - Event hooks through `EventBus`
 - Rich CLI for `submit`, `list`, `status`, `watch`, `logs`, `history`, `inspect`, `cleanup`, `daemon`, `monitor`, and `cancel`
-- Default stdout/stderr capture for every submitted job
+- Default stdout/stderr capture for every submitted job, stored under the
+  submission working directory unless overridden
 
 ## Retry and Dependency Example
 
@@ -95,6 +96,11 @@ molq submit slurm --profile gpu python train.py
 molq daemon slurm --profile gpu --once
 molq cleanup slurm --profile gpu --dry-run
 ```
+
+By default, `~/.molq` stores global state such as `config.toml` and `jobs.db`.
+Per-job artifacts such as generated scripts, manifests, and default logs are
+written under the submission working directory at `.molq/jobs/<job-id>/` unless
+you override `jobs_dir` or explicit output paths.
 
 ## Documentation
 

@@ -137,6 +137,18 @@ class TestDurationParse:
     def test_parse_plain_seconds(self):
         assert Duration.parse("3600").seconds == 3600
 
+    def test_parse_hms_hours_exceed_24(self):
+        # 40:00:00 → 40 hours
+        assert Duration.parse("40:00:00").seconds == 40 * 3600
+
+    def test_parse_slurm_day_format(self):
+        # 1-00:00:00 → 1 day = 86400s
+        assert Duration.parse("1-00:00:00").seconds == 86400
+
+    def test_parse_slurm_day_format_with_hours(self):
+        # 2-06:30:00 → 2 days + 6h + 30m
+        assert Duration.parse("2-06:30:00").seconds == 2 * 86400 + 6 * 3600 + 30 * 60
+
     def test_parse_empty_raises(self):
         with pytest.raises(ValueError, match="Empty"):
             Duration.parse("")

@@ -206,15 +206,28 @@ class JobReconciler:
     ) -> TerminalStatus:
         """Determine terminal state for a disappeared job."""
         # For LocalScheduler, use resolve_terminal_with_dir if available
-        if hasattr(self._scheduler, "resolve_terminal_with_dir") and self._jobs_dir:
+        resolve_with_dir = getattr(type(self._scheduler), "resolve_terminal_with_dir", None)
+        if callable(resolve_with_dir):
             from pathlib import Path
 
-            job_dir = Path(self._jobs_dir) / job_id
-            result = _normalize_terminal_status(
-                self._scheduler.resolve_terminal_with_dir(scheduler_job_id, job_dir)
-            )
-            if result is not None:
-                return result
+            record = self._store.get_record(job_id)
+            job_dir_value = record.metadata.get("molq.job_dir") if record else None
+            if job_dir_value:
+                result = _normalize_terminal_status(
+                    resolve_with_dir(
+                        self._scheduler,
+                        scheduler_job_id, Path(job_dir_value)
+                    )
+                )
+                if result is not None:
+                    return result
+            elif self._jobs_dir:
+                job_dir = Path(self._jobs_dir) / job_id
+                result = _normalize_terminal_status(
+                    resolve_with_dir(self._scheduler, scheduler_job_id, job_dir)
+                )
+                if result is not None:
+                    return result
 
         result = _normalize_terminal_status(
             self._scheduler.resolve_terminal(scheduler_job_id)

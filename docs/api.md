@@ -6,7 +6,7 @@
 
 ```python
 Submitor(
-    cluster_name: str,
+    cluster_name: str | None = None,
     scheduler: str = "local",
     *,
     defaults: SubmitorDefaults | None = None,
@@ -21,6 +21,10 @@ Submitor(
 ```
 
 Primary entry point for job submission and cluster-scoped job management.
+
+Global state such as `jobs.db` still lives under `~/.molq` by default. When
+`jobs_dir` is omitted, per-job artifacts are written under the submission
+working directory at `.molq/jobs/<job-id>/`.
 
 Alternative constructor:
 
@@ -61,6 +65,7 @@ submitor.submit(
     after: list[str] | None = None,
     after_failure: list[str] | None = None,
     after_success: list[str] | None = None,
+    job_dir_name: str | None = None,
 ) -> JobHandle
 ```
 
@@ -71,6 +76,7 @@ Behavior:
 - retries create a new attempt row with a fresh `job_id`
 - `JobHandle.job_id` remains the root Molq job id for the family
 - `watch()` and `JobHandle.wait()` follow the latest attempt when retries are enabled
+- default artifacts are created under the resolved submission `cwd` unless `jobs_dir` is set
 
 ### `JobHandle`
 
@@ -233,7 +239,7 @@ Key fields:
 - `scheduler_options`
 - `retry`
 - `retention`
-- `jobs_dir`
+- `jobs_dir` — optional override for where per-job artifacts are written
 
 ### `MolqConfig`
 

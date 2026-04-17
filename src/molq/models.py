@@ -167,6 +167,7 @@ class JobSpec:
     retry_group_id: str | None = None
     request_json: str = "{}"
     profile_name: str | None = None
+    dir_name: str | None = None
 
     @staticmethod
     def new_job_id() -> str:
