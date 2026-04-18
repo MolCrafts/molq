@@ -1,5 +1,7 @@
 """Tests for molq.reconciler — JobReconciler state sync."""
 
+from pathlib import Path
+
 import pytest
 
 from molq.models import Command, JobSpec
@@ -14,6 +16,7 @@ def _insert_job(store: JobStore, job_id: str = "j1", scheduler_job_id: str = "s1
         cluster_name="dev",
         scheduler="local",
         command=Command.from_submit_args(argv=["echo", "hi"]),
+        metadata={"molq.job_dir": "/tmp/work/.molq/jobs/j1"},
     )
     store.insert_job(spec)
     store.update_job(
@@ -74,6 +77,32 @@ class TestReconcile:
 
         assert len(changes) == 1
         assert changes[0].new_state == JobState.FAILED
+
+    def test_disappeared_prefers_recorded_job_dir(self, store):
+        _insert_job(store)
+
+        class SchedulerWithDir:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, Path]] = []
+
+            def poll_many(self, scheduler_job_ids):
+                return {}
+
+            def resolve_terminal_with_dir(self, scheduler_job_id, job_dir):
+                self.calls.append((scheduler_job_id, job_dir))
+                return JobState.SUCCEEDED
+
+            def resolve_terminal(self, scheduler_job_id):
+                return None
+
+        mock_scheduler = SchedulerWithDir()
+
+        reconciler = JobReconciler(mock_scheduler, store, "dev")
+        changes = reconciler.reconcile()
+
+        assert len(changes) == 1
+        assert changes[0].new_state == JobState.SUCCEEDED
+        assert mock_scheduler.calls == [("s1", Path("/tmp/work/.molq/jobs/j1"))]
 
     def test_disappeared_no_evidence_becomes_lost(self, store, mock_scheduler):
         _insert_job(store)

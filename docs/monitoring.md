@@ -79,6 +79,8 @@ These strategies live in `molq.strategies` and back the monitor layer.
 ## Logs
 
 Each submitted job gets default stdout and stderr paths unless you override them in `JobExecution`.
+By default these files live under the submission working directory at
+`.molq/jobs/<job-id>/`.
 
 At runtime, those resolved paths are stored in `JobRecord.metadata` under:
 

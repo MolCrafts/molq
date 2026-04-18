@@ -219,6 +219,8 @@ class RunDashboard:
         ui = _UIState()
 
         def _key_reader() -> None:
+            if not sys.stdin.isatty():
+                return
             fd = sys.stdin.fileno()
             saved = None
             try:

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import tempfile
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -95,12 +94,14 @@ class Submitor:
         defaults: Default resource/scheduling/execution parameters.
         scheduler_options: Scheduler-specific configuration.
         store: Custom JobStore (default: ~/.molq/jobs.db).
-        jobs_dir: Runtime directory for materialized scripts and default logs.
+        jobs_dir: Optional override for per-job artifacts. When omitted,
+            materialized scripts and default logs are written under the
+            submission working directory at `.molq/jobs/<job-id>/`.
     """
 
     def __init__(
         self,
-        cluster_name: str,
+        cluster_name: str | None = None,
         scheduler: str = "local",
         *,
         defaults: SubmitorDefaults | None = None,
@@ -113,6 +114,8 @@ class Submitor:
         event_bus: EventBus | None = None,
         _scheduler: Any | None = None,
     ) -> None:
+        if cluster_name is None:
+            cluster_name = "default"
         if _scheduler is None:
             if scheduler not in OPTIONS_TYPE_MAP:
                 raise ConfigError(
@@ -206,10 +209,19 @@ class Submitor:
         after: list[str] | None = None,
         after_failure: list[str] | None = None,
         after_success: list[str] | None = None,
+        job_dir_name: str | None = None,
     ) -> JobHandle:
         """Submit a job.
 
         Exactly one of argv, command, or script must be provided.
+
+        Args:
+            job_dir_name: Optional name for the job directory under ``jobs_dir``.
+                When provided, the directory is named *job_dir_name* instead of
+                the auto-generated UUID.  Useful when callers want log files to
+                live alongside other per-execution artifacts under a meaningful
+                name (e.g. ``exec-<run_id>``). When ``jobs_dir`` is not set,
+                the base directory is the resolved submission ``cwd``.
 
         Returns:
             JobHandle for the submitted job.
@@ -234,6 +246,7 @@ class Submitor:
             previous_attempt_job_id=None,
             retry_group_id=lineage_job_id,
             profile_name=self._profile_name,
+            dir_name=job_dir_name,
         )
         return handle
 
@@ -420,24 +433,37 @@ class Submitor:
             shutil.copy2(script.file_path, target)
             target.chmod(0o700)
 
-    def _resolve_jobs_dir(self, jobs_dir: str | Path | None) -> Path:
+    def _resolve_jobs_dir(self, jobs_dir: str | Path | None) -> Path | None:
         if jobs_dir is not None:
             return Path(jobs_dir).expanduser().resolve()
 
-        db_path = getattr(self._store, "db_path", None)
-        if isinstance(db_path, Path):
-            return db_path.parent / "jobs"
+        return None
 
-        return Path(tempfile.gettempdir()) / "molq" / "jobs"
+    def _default_jobs_dir(self, cwd: str) -> Path:
+        return Path(cwd) / ".molq" / "jobs"
 
-    def _prepare_job_dir(self, job_id: str) -> Path:
-        self._jobs_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        job_dir = self._job_dir_path(job_id)
+    def _prepare_job_dir(
+        self,
+        job_id: str,
+        cwd: str,
+        dir_name: str | None = None,
+    ) -> Path:
+        jobs_dir = self._job_dir_root(cwd)
+        jobs_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        job_dir = self._job_dir_path(job_id, cwd, dir_name)
         job_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         return job_dir
 
-    def _job_dir_path(self, job_id: str) -> Path:
-        return self._jobs_dir / job_id
+    def _job_dir_root(self, cwd: str) -> Path:
+        return self._jobs_dir or self._default_jobs_dir(cwd)
+
+    def _job_dir_path(
+        self,
+        job_id: str,
+        cwd: str,
+        dir_name: str | None = None,
+    ) -> Path:
+        return self._job_dir_root(cwd) / (dir_name or job_id)
 
     def _resolve_cwd(self, cwd: str | Path | None) -> str:
         base = Path(cwd).expanduser() if cwd is not None else Path.cwd()
@@ -478,6 +504,7 @@ class Submitor:
         previous_attempt_job_id: str | None,
         retry_group_id: str | None,
         profile_name: str | None,
+        dir_name: str | None = None,
     ) -> tuple[JobHandle, list[JobDependency]]:
         cmd = Command.from_submit_args(argv=argv, command=command, script=script)
         if cmd.script is not None and cmd.script.variant == "path":
@@ -505,9 +532,9 @@ class Submitor:
             ),
         )
 
-        job_id = JobSpec.new_job_id() if attempt > 1 else root_job_id
-        job_dir = self._job_dir_path(job_id)
         cwd = self._resolve_cwd(merged_execution.cwd)
+        job_id = JobSpec.new_job_id() if attempt > 1 else root_job_id
+        job_dir = self._job_dir_path(job_id, cwd, dir_name)
         stdout_path = self._resolve_output_path(
             merged_execution.output_file, cwd, job_dir, "stdout.log"
         )
@@ -576,10 +603,11 @@ class Submitor:
             retry_group_id=retry_group_id or root_job_id,
             request_json=request_json,
             profile_name=profile_name,
+            dir_name=dir_name,
         )
         self._validate_spec(spec, requested_execution=requested_execution)
 
-        job_dir = self._prepare_job_dir(job_id)
+        job_dir = self._prepare_job_dir(job_id, cwd, dir_name)
         if cmd.script is not None and cmd.script.variant == "path":
             self._materialize_script(cmd.script, job_dir)
         self._write_manifest(spec)
@@ -835,16 +863,15 @@ class Submitor:
         return ""
 
     def _write_manifest(self, spec: JobSpec) -> None:
-        manifest_path = self._job_dir_path(spec.job_id) / "manifest.json"
+        job_dir = self._job_dir_path(spec.job_id, spec.cwd, spec.dir_name)
+        manifest_path = job_dir / "manifest.json"
         manifest_path.write_text(
             json.dumps(
                 {
                     "job_id": spec.job_id,
                     "root_job_id": spec.root_job_id,
                     "attempt": spec.attempt,
-                    "script_path": str(
-                        self._job_dir_path(spec.job_id) / "user_script.sh"
-                    )
+                    "script_path": str(job_dir / "user_script.sh")
                     if spec.command.script is not None
                     and spec.command.script.variant == "path"
                     else None,

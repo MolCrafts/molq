@@ -1,5 +1,8 @@
 """Tests for molq.submitor — Submitor and JobHandle."""
 
+from pathlib import Path
+from unittest.mock import MagicMock
+
 import pytest
 
 from molq.errors import (
@@ -144,6 +147,46 @@ class TestSubmit:
         assert "molq.job_dir" in record.metadata
         assert record.metadata["molq.stdout_path"].endswith("stdout.log")
         assert record.metadata["molq.stderr_path"].endswith("stderr.log")
+
+    def test_submit_defaults_job_dir_under_current_workdir(
+        self, memory_store, tmp_path, monkeypatch
+    ):
+        workdir = tmp_path / "workspace"
+        workdir.mkdir()
+        monkeypatch.chdir(workdir)
+
+        scheduler = MagicMock()
+        scheduler.submit.return_value = "12345"
+        s = Submitor("dev", "local", store=memory_store, _scheduler=scheduler)
+        handle = s.submit(argv=["echo", "hello"])
+
+        record = s.get(handle.job_id)
+        expected_job_dir = workdir / ".molq" / "jobs" / handle.job_id
+        assert Path(record.metadata["molq.job_dir"]) == expected_job_dir
+        assert (
+            Path(record.metadata["molq.stdout_path"]) == expected_job_dir / "stdout.log"
+        )
+        assert (
+            Path(record.metadata["molq.stderr_path"]) == expected_job_dir / "stderr.log"
+        )
+
+    def test_submit_uses_execution_cwd_for_default_job_dir(
+        self, memory_store, tmp_path
+    ):
+        submit_cwd = tmp_path / "submit-here"
+        submit_cwd.mkdir()
+
+        scheduler = MagicMock()
+        scheduler.submit.return_value = "12345"
+        s = Submitor("dev", "local", store=memory_store, _scheduler=scheduler)
+        handle = s.submit(
+            argv=["echo", "hello"],
+            execution=JobExecution(cwd=str(submit_cwd)),
+        )
+
+        record = s.get(handle.job_id)
+        expected_job_dir = submit_cwd / ".molq" / "jobs" / handle.job_id
+        assert Path(record.metadata["molq.job_dir"]) == expected_job_dir
 
     def test_submit_script_path_not_found_raises(self, submitor):
         with pytest.raises(ScriptError, match="not found"):

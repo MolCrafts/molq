@@ -133,11 +133,21 @@ class Duration:
 
     @classmethod
     def parse(cls, s: str) -> Duration:
-        """Parse '2h30m', '01:30:00', '90m', or plain seconds."""
+        """Parse '2h30m', '01:30:00', '40:00:00', '1-00:00:00', '90m', or plain seconds."""
         if not s:
             raise ValueError("Empty duration string")
 
-        # HH:MM:SS or MM:SS
+        # D-HH:MM:SS (SLURM day format, e.g. "1-00:00:00")
+        if "-" in s and ":" in s:
+            day_part, time_part = s.split("-", 1)
+            time_parts = time_part.split(":")
+            if len(time_parts) == 3:
+                d = int(day_part)
+                h, m, sec = (int(p) for p in time_parts)
+                return cls(seconds=d * 86400 + h * 3600 + m * 60 + sec)
+            raise ValueError(f"Cannot parse duration: {s!r}")
+
+        # HH:MM:SS or MM:SS (HH may exceed 24, e.g. "40:00:00")
         if ":" in s:
             parts = s.split(":")
             if len(parts) == 3:
