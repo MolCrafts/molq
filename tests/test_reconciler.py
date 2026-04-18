@@ -80,7 +80,7 @@ class TestReconcile:
 
     def test_disappeared_prefers_recorded_job_dir(self, store):
         _insert_job(store)
-        
+
         class SchedulerWithDir:
             def __init__(self) -> None:
                 self.calls: list[tuple[str, Path]] = []

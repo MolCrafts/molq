@@ -163,8 +163,12 @@ class TestSubmit:
         record = s.get(handle.job_id)
         expected_job_dir = workdir / ".molq" / "jobs" / handle.job_id
         assert Path(record.metadata["molq.job_dir"]) == expected_job_dir
-        assert Path(record.metadata["molq.stdout_path"]) == expected_job_dir / "stdout.log"
-        assert Path(record.metadata["molq.stderr_path"]) == expected_job_dir / "stderr.log"
+        assert (
+            Path(record.metadata["molq.stdout_path"]) == expected_job_dir / "stdout.log"
+        )
+        assert (
+            Path(record.metadata["molq.stderr_path"]) == expected_job_dir / "stderr.log"
+        )
 
     def test_submit_uses_execution_cwd_for_default_job_dir(
         self, memory_store, tmp_path

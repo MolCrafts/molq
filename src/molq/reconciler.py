@@ -206,7 +206,9 @@ class JobReconciler:
     ) -> TerminalStatus:
         """Determine terminal state for a disappeared job."""
         # For LocalScheduler, use resolve_terminal_with_dir if available
-        resolve_with_dir = getattr(type(self._scheduler), "resolve_terminal_with_dir", None)
+        resolve_with_dir = getattr(
+            type(self._scheduler), "resolve_terminal_with_dir", None
+        )
         if callable(resolve_with_dir):
             from pathlib import Path
 
@@ -215,8 +217,7 @@ class JobReconciler:
             if job_dir_value:
                 result = _normalize_terminal_status(
                     resolve_with_dir(
-                        self._scheduler,
-                        scheduler_job_id, Path(job_dir_value)
+                        self._scheduler, scheduler_job_id, Path(job_dir_value)
                     )
                 )
                 if result is not None:
