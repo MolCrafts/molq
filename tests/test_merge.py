@@ -15,21 +15,21 @@ class TestMergeDefaults:
     def test_defaults_only(self):
         defaults = SubmitorDefaults(
             resources=JobResources(cpu_count=4, memory=Memory.gb(8)),
-            scheduling=JobScheduling(queue="normal"),
+            scheduling=JobScheduling(partition="normal"),
         )
         r, s, e = merge_defaults(defaults)
         assert r.cpu_count == 4
         assert r.memory == Memory.gb(8)
-        assert s.queue == "normal"
+        assert s.partition == "normal"
 
     def test_override_only(self):
         r, s, e = merge_defaults(
             None,
             resources=JobResources(cpu_count=8),
-            scheduling=JobScheduling(queue="gpu"),
+            scheduling=JobScheduling(partition="gpu"),
         )
         assert r.cpu_count == 8
-        assert s.queue == "gpu"
+        assert s.partition == "gpu"
 
     def test_override_replaces_default(self):
         defaults = SubmitorDefaults(
@@ -89,13 +89,13 @@ class TestMergeDefaults:
 
     def test_scheduling_merge(self):
         defaults = SubmitorDefaults(
-            scheduling=JobScheduling(queue="normal", account="team-ml"),
+            scheduling=JobScheduling(partition="normal", account="team-ml"),
         )
         _, s, _ = merge_defaults(
             defaults,
-            scheduling=JobScheduling(queue="gpu"),
+            scheduling=JobScheduling(partition="gpu"),
         )
-        assert s.queue == "gpu"
+        assert s.partition == "gpu"
         assert s.account == "team-ml"
 
     def test_execution_merge(self):

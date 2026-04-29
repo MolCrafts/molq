@@ -13,6 +13,7 @@ import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -28,6 +29,7 @@ from molq.options import (
     SlurmSchedulerOptions,
 )
 from molq.status import JobState
+from molq.transport import LocalTransport, Transport, TransportError
 
 logger = mollog.get_logger(__name__)
 
@@ -59,6 +61,32 @@ class Scheduler(Protocol):
         """Determine terminal status for a disappeared job."""
         ...
 
+    def list_queue(self, *, user: str | None = None) -> list[QueueEntry]:
+        """Return the scheduler's current queue snapshot.
+
+        Equivalent to ``squeue --me`` (SLURM), ``qstat -u $USER`` (PBS), or
+        ``bjobs`` (LSF).  Local-style schedulers return an empty list.
+        """
+        ...
+
+
+@dataclass(frozen=True)
+class QueueEntry:
+    """A row from the scheduler's current queue.
+
+    Independent of molq's own ``JobRecord``: this represents jobs as the
+    scheduler sees them, including ones submitted outside molq.
+    """
+
+    scheduler_job_id: str
+    name: str | None = None
+    user: str | None = None
+    state: JobState = JobState.QUEUED
+    raw_state: str = ""
+    partition: str | None = None
+    submit_time: float | None = None
+    start_time: float | None = None
+
 
 @dataclass(frozen=True)
 class TerminalStatus:
@@ -84,7 +112,7 @@ class SchedulerCapabilities:
     supports_gpu_count: bool = False
     supports_gpu_type: bool = False
     supports_time_limit: bool = False
-    supports_queue: bool = False
+    supports_partition: bool = False
     supports_account: bool = False
     supports_priority: bool = False
     supports_dependency: bool = False
@@ -228,6 +256,9 @@ class LocalScheduler:
         # The reconciler passes through resolve_terminal_with_dir instead.
         return None
 
+    def list_queue(self, *, user: str | None = None) -> list[QueueEntry]:
+        return []
+
     def resolve_terminal_with_dir(
         self, scheduler_job_id: str, job_dir: Path
     ) -> TerminalStatus | None:
@@ -251,6 +282,199 @@ class LocalScheduler:
     def _materialize_script(self, spec: JobSpec, job_dir: Path) -> Path:
         script_path = job_dir / "run.sh"
         _atomic_write_script(script_path, _render_job_script(spec, job_dir))
+        return script_path
+
+
+# ---------------------------------------------------------------------------
+# Shell Scheduler (transport-aware "no batch system, just run it")
+# ---------------------------------------------------------------------------
+
+
+class ShellScheduler:
+    """Run jobs via a plain shell on whatever the transport points at.
+
+    Where :class:`LocalScheduler` uses an in-process :class:`subprocess.Popen`
+    and a reaper thread, ``ShellScheduler`` is transport-agnostic: it writes a
+    wrapper script that backgrounds the user command, captures its pid into a
+    sibling file, and writes the exit code on completion.  Polling reads those
+    files via the transport instead of touching local OS state.
+
+    The trade-off vs ``LocalScheduler`` is one extra fork (the wrapper) per
+    job — negligible against any real workload.  The benefit is that
+    ``ShellScheduler(transport=SshTransport(...))`` runs jobs directly on a
+    remote workstation with no batch system, which is the canonical "I just
+    want to ssh into my desktop and run this" use case.
+    """
+
+    def __init__(
+        self,
+        options: LocalSchedulerOptions | None = None,
+        *,
+        transport: Transport | None = None,
+    ) -> None:
+        self._opts = options or LocalSchedulerOptions()
+        self._transport: Transport = transport or LocalTransport()
+
+    def capabilities(self) -> SchedulerCapabilities:
+        return SchedulerCapabilities(
+            supports_cwd=True,
+            supports_env=True,
+            supports_output_file=True,
+            supports_error_file=True,
+            # job_name is purely metadata for the shell path — accept it so
+            # callers like molexp's SubmitHandler can set it uniformly.
+            supports_job_name=True,
+        )
+
+    def submit(self, spec: JobSpec, job_dir: Path) -> str:
+        # Materialize the user script locally first (it may reference files
+        # the user expects on disk).  Submitor is responsible for staging the
+        # job_dir to the transport's filesystem before submit when the
+        # transport is non-local.
+        script_path = self._materialize_script(spec, job_dir)
+        wrapper_path = job_dir / "_wrapper.sh"
+        pid_path = job_dir / ".pid"
+        exit_code_path = job_dir / ".exit_code"
+
+        # The wrapper runs the user script in the background, records its
+        # pid, waits for it, and stores the exit code.  We then daemonise the
+        # wrapper itself so closing the ssh channel doesn't kill the job.
+        cwd = spec.execution.cwd or spec.cwd
+        env_lines = ""
+        if spec.execution.env:
+            env_lines = "\n".join(
+                f"export {k}={_shell_quote(v)}" for k, v in sorted(spec.execution.env.items())
+            ) + "\n"
+        cd_line = f"cd {_shell_quote(str(cwd))}\n" if cwd else ""
+
+        out_redir = (
+            f' > {_shell_quote(spec.execution.output_file)}'
+            if spec.execution.output_file else " > /dev/null"
+        )
+        err_redir = (
+            f' 2> {_shell_quote(spec.execution.error_file)}'
+            if spec.execution.error_file else " 2> /dev/null"
+        )
+
+        wrapper = (
+            f"#!/bin/bash\n"
+            f"{env_lines}"
+            f"{cd_line}"
+            f'( bash {_shell_quote(str(script_path))}{out_redir}{err_redir} ) &\n'
+            f'pid=$!\n'
+            f'echo $pid > {_shell_quote(str(pid_path))}\n'
+            f'wait $pid\n'
+            f'echo $? > {_shell_quote(str(exit_code_path))}\n'
+        )
+        # Wrapper script lands on the transport's filesystem so that ssh-routed
+        # ShellScheduler instances find it on the remote at the same path the
+        # remote shell will see.
+        self._transport.write_text(str(wrapper_path), wrapper, mode=0o700)
+
+        # Launch the wrapper as a detached background process via the transport
+        # and capture the pid the wrapper writes into .pid.  We also put the
+        # wrapper itself into nohup + background so closing the ssh session
+        # doesn't terminate it.
+        launch = (
+            f'nohup bash {_shell_quote(str(wrapper_path))} '
+            f'> /dev/null 2>&1 < /dev/null &\n'
+            f'echo $!\n'
+        )
+        try:
+            result = self._transport.run(["bash", "-c", launch], timeout=30)
+        except TransportError as e:
+            raise SchedulerError(
+                "shell submission failed", command=["bash", "-c", launch],
+            ) from e
+        if result.returncode != 0:
+            raise SchedulerError(
+                "shell submission failed",
+                stderr=result.stderr,
+                command=["bash", "-c", launch],
+            )
+        # The pid we get back is the wrapper's pid; the actual job pid is in
+        # .pid on the transport's filesystem.  Either pid identifies the job
+        # for kill/poll purposes — we use the inner job pid because that's the
+        # one users would expect (e.g. matches `ps`).  Wait briefly for the
+        # wrapper to write .pid (typical: <50ms).
+        import time as _time
+        deadline = _time.monotonic() + 5.0
+        while _time.monotonic() < deadline:
+            if self._transport.exists(str(pid_path)):
+                try:
+                    return self._transport.read_text(str(pid_path)).strip()
+                except (FileNotFoundError, TransportError):
+                    pass
+            _time.sleep(0.02)
+        # Fallback: return the wrapper pid; cancel/poll still work via this pid.
+        return result.stdout.strip()
+
+    def poll_many(self, scheduler_job_ids: Sequence[str]) -> dict[str, JobState]:
+        # Use `kill -0 <pid>` which exits 0 if the process is alive, 1 otherwise.
+        # Batch into a single shell to keep round-trip count to one.
+        if not scheduler_job_ids:
+            return {}
+        checks = " ; ".join(
+            f"kill -0 {_shell_quote(p)} 2>/dev/null && echo {_shell_quote(p)}=R || true"
+            for p in scheduler_job_ids
+        )
+        try:
+            result = self._transport.run(["bash", "-c", checks], timeout=15)
+        except TransportError:
+            return {}
+        out: dict[str, JobState] = {}
+        for line in result.stdout.strip().split("\n"):
+            line = line.strip()
+            if line.endswith("=R"):
+                out[line[:-2]] = JobState.RUNNING
+        return out
+
+    def cancel(self, scheduler_job_id: str) -> None:
+        # SIGTERM, brief grace period, SIGKILL — match LocalScheduler semantics.
+        cmd = (
+            f"kill -TERM {_shell_quote(scheduler_job_id)} 2>/dev/null ; "
+            f"sleep 0.5 ; "
+            f"kill -KILL {_shell_quote(scheduler_job_id)} 2>/dev/null ; true"
+        )
+        try:
+            self._transport.run(["bash", "-c", cmd], timeout=10)
+        except TransportError:
+            pass
+
+    def resolve_terminal(self, scheduler_job_id: str) -> TerminalStatus | None:
+        # Without job_dir we can't read .exit_code; the reconciler must call
+        # resolve_terminal_with_dir.  Mirror LocalScheduler.
+        return None
+
+    def list_queue(self, *, user: str | None = None) -> list[QueueEntry]:
+        return []
+
+    def resolve_terminal_with_dir(
+        self, scheduler_job_id: str, job_dir: Path
+    ) -> TerminalStatus | None:
+        exit_code_path = str(job_dir / ".exit_code")
+        try:
+            if not self._transport.exists(exit_code_path):
+                return TerminalStatus(
+                    state=JobState.LOST,
+                    failure_reason="exit code file missing for shell job",
+                )
+            text = self._transport.read_text(exit_code_path).strip()
+            code = int(text)
+        except (FileNotFoundError, TransportError, ValueError):
+            return TerminalStatus(
+                state=JobState.LOST,
+                failure_reason="exit code file unreadable for shell job",
+            )
+        state = JobState.SUCCEEDED if code == 0 else JobState.FAILED
+        reason = None if code == 0 else f"process exited with code {code}"
+        return TerminalStatus(state=state, exit_code=code, failure_reason=reason)
+
+    def _materialize_script(self, spec: JobSpec, job_dir: Path) -> Path:
+        script_path = job_dir / "run.sh"
+        self._transport.write_text(
+            str(script_path), _render_job_script(spec, job_dir), mode=0o700,
+        )
         return script_path
 
 
@@ -282,10 +506,23 @@ _SLURM_SACCT_MAP: dict[str, JobState] = {
 
 
 class SlurmScheduler:
-    """Submit and manage jobs via SLURM."""
+    """Submit and manage jobs via SLURM.
 
-    def __init__(self, options: SlurmSchedulerOptions | None = None) -> None:
+    All shell calls (``sbatch``, ``squeue``, ``scancel``, ``sacct``) go through
+    the injected :class:`~molq.transport.Transport` — defaulting to
+    :class:`~molq.transport.LocalTransport` for byte-identical behaviour to
+    pre-transport molq.  Pass an :class:`~molq.transport.SshTransport` to drive
+    a remote SLURM cluster from a laptop.
+    """
+
+    def __init__(
+        self,
+        options: SlurmSchedulerOptions | None = None,
+        *,
+        transport: Transport | None = None,
+    ) -> None:
         self._opts = options or SlurmSchedulerOptions()
+        self._transport: Transport = transport or LocalTransport()
 
     def capabilities(self) -> SchedulerCapabilities:
         return SchedulerCapabilities(
@@ -299,7 +536,7 @@ class SlurmScheduler:
             supports_gpu_count=True,
             supports_gpu_type=True,
             supports_time_limit=True,
-            supports_queue=True,
+            supports_partition=True,
             supports_account=True,
             supports_dependency=True,
             supports_node_count=True,
@@ -315,21 +552,18 @@ class SlurmScheduler:
         cmd.extend(self._opts.extra_sbatch_flags)
 
         try:
-            proc = subprocess.run(
-                cmd, capture_output=True, check=True, text=True, timeout=60
-            )
-            return proc.stdout.strip().split(";")[0]
-        except subprocess.CalledProcessError as e:
+            result = self._transport.run(cmd, timeout=60)
+        except TransportError as e:
+            raise SchedulerError(
+                "SLURM submission timed out", command=cmd,
+            ) from e
+        if result.returncode != 0:
             raise SchedulerError(
                 "SLURM submission failed",
-                stderr=e.stderr,
+                stderr=result.stderr,
                 command=cmd,
-            ) from e
-        except subprocess.TimeoutExpired as e:
-            raise SchedulerError(
-                "SLURM submission timed out",
-                command=cmd,
-            ) from e
+            )
+        return result.stdout.strip().split(";")[0]
 
     def poll_many(self, scheduler_job_ids: Sequence[str]) -> dict[str, JobState]:
         if not scheduler_job_ids:
@@ -346,38 +580,34 @@ class SlurmScheduler:
         ]
 
         try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, check=False, timeout=30
-            )
-            if not proc.stdout.strip():
-                return {}
+            result = self._transport.run(cmd, timeout=30)
+        except TransportError as e:
+            logger.warning("squeue invocation failed: %s", e)
+            return {}
+        if not result.stdout.strip():
+            return {}
 
-            result: dict[str, JobState] = {}
-            for line in proc.stdout.strip().split("\n"):
-                parts = line.split()
-                if len(parts) >= 2:
-                    jid, st = parts[0], parts[1]
-                    state = _SLURM_STATE_MAP.get(st)
-                    if state is not None:
-                        result[jid] = state
-            return result
-        except subprocess.TimeoutExpired:
-            logger.warning("squeue timed out for ids=%s", ids_str)
-            return {}
-        except OSError as e:
-            logger.error("squeue invocation failed: %s", e)
-            return {}
+        out: dict[str, JobState] = {}
+        for line in result.stdout.strip().split("\n"):
+            parts = line.split()
+            if len(parts) >= 2:
+                jid, st = parts[0], parts[1]
+                state = _SLURM_STATE_MAP.get(st)
+                if state is not None:
+                    out[jid] = state
+        return out
 
     def cancel(self, scheduler_job_id: str) -> None:
-        subprocess.run(
-            [self._opts.scancel_path, scheduler_job_id],
-            capture_output=True,
-            timeout=30,
-        )
+        try:
+            self._transport.run(
+                [self._opts.scancel_path, scheduler_job_id], timeout=30,
+            )
+        except TransportError:
+            pass
 
     def resolve_terminal(self, scheduler_job_id: str) -> TerminalStatus | None:
         try:
-            proc = subprocess.run(
+            result = self._transport.run(
                 [
                     self._opts.sacct_path,
                     "-j",
@@ -387,30 +617,62 @@ class SlurmScheduler:
                     "-n",
                     "-P",
                 ],
-                capture_output=True,
-                text=True,
-                check=False,
                 timeout=15,
             )
-            if proc.returncode != 0 or not proc.stdout.strip():
-                return None
-
-            first_line = proc.stdout.strip().split("\n")[0]
+        except TransportError:
+            return None
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        try:
+            first_line = result.stdout.strip().split("\n")[0]
             parts = first_line.split("|")
             raw_state = parts[0].strip()
             state_str = raw_state.split()[0]
-            state = _SLURM_SACCT_MAP.get(state_str)
-            if state is None:
-                return None
-            exit_code = _parse_exit_code(parts[1]) if len(parts) > 1 else None
-            return TerminalStatus(
-                state=state,
-                exit_code=exit_code,
-                failure_reason=_default_failure_reason(state, exit_code, raw_state),
-                raw_state=raw_state,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError, IndexError):
+        except IndexError:
             return None
+        state = _SLURM_SACCT_MAP.get(state_str)
+        if state is None:
+            return None
+        exit_code = _parse_exit_code(parts[1]) if len(parts) > 1 else None
+        return TerminalStatus(
+            state=state,
+            exit_code=exit_code,
+            failure_reason=_default_failure_reason(state, exit_code, raw_state),
+            raw_state=raw_state,
+        )
+
+    def list_queue(self, *, user: str | None = None) -> list[QueueEntry]:
+        cmd: list[str] = [self._opts.squeue_path, "-h", "-o", "%i|%j|%u|%t|%P|%V|%S"]
+        if user is None:
+            cmd.append("--me")
+        else:
+            cmd += ["-u", user]
+        try:
+            result = self._transport.run(cmd, timeout=30)
+        except TransportError as exc:
+            logger.warning("squeue invocation failed: %s", exc)
+            return []
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+        entries: list[QueueEntry] = []
+        for line in result.stdout.strip().split("\n"):
+            parts = line.split("|")
+            if len(parts) < 7:
+                continue
+            jid, name, usr, raw_state, part, sub_t, start_t = parts[:7]
+            entries.append(
+                QueueEntry(
+                    scheduler_job_id=jid,
+                    name=name or None,
+                    user=usr or None,
+                    state=_SLURM_STATE_MAP.get(raw_state, JobState.QUEUED),
+                    raw_state=raw_state,
+                    partition=part or None,
+                    submit_time=_parse_slurm_time(sub_t),
+                    start_time=_parse_slurm_time(start_t),
+                )
+            )
+        return entries
 
     def _generate_script(self, spec: JobSpec, job_dir: Path) -> Path:
         script_path = job_dir / "run_slurm.sh"
@@ -426,16 +688,15 @@ class SlurmScheduler:
 
         lines.extend(_render_job_lines(spec, job_dir))
 
-        script_path.write_text("\n".join(lines) + "\n")
-        script_path.chmod(0o700)
+        self._transport.write_text(str(script_path), "\n".join(lines) + "\n", mode=0o700)
         return script_path
 
     def _map_resources(self, spec: JobSpec) -> dict[str, str]:
         mapped: dict[str, str] = {}
         r, s, e = spec.resources, spec.scheduling, spec.execution
 
-        if s.queue:
-            mapped["partition"] = s.queue
+        if s.partition:
+            mapped["partition"] = s.partition
         if r.cpu_count:
             mapped["ntasks"] = str(r.cpu_count)
         if r.memory:
@@ -488,10 +749,20 @@ _PBS_STATE_MAP: dict[str, JobState] = {
 
 
 class PBSScheduler:
-    """Submit and manage jobs via PBS/Torque."""
+    """Submit and manage jobs via PBS/Torque.
 
-    def __init__(self, options: PBSSchedulerOptions | None = None) -> None:
+    All shell calls (``qsub``, ``qstat``, ``qdel``, ``tracejob``) go through
+    the injected :class:`~molq.transport.Transport`.
+    """
+
+    def __init__(
+        self,
+        options: PBSSchedulerOptions | None = None,
+        *,
+        transport: Transport | None = None,
+    ) -> None:
         self._opts = options or PBSSchedulerOptions()
+        self._transport: Transport = transport or LocalTransport()
 
     def capabilities(self) -> SchedulerCapabilities:
         return SchedulerCapabilities(
@@ -504,7 +775,7 @@ class PBSScheduler:
             supports_memory=True,
             supports_gpu_count=True,
             supports_time_limit=True,
-            supports_queue=True,
+            supports_partition=True,
             supports_account=True,
             supports_node_count=True,
             supports_dependency=True,
@@ -516,17 +787,16 @@ class PBSScheduler:
         cmd.extend(self._opts.extra_qsub_flags)
 
         try:
-            proc = subprocess.run(
-                cmd, capture_output=True, check=True, text=True, timeout=60
-            )
-            raw_id = proc.stdout.strip()
-            return raw_id.split(".")[0]
-        except subprocess.CalledProcessError as e:
+            result = self._transport.run(cmd, timeout=60)
+        except TransportError as e:
+            raise SchedulerError("PBS submission timed out", command=cmd) from e
+        if result.returncode != 0:
             raise SchedulerError(
                 "PBS submission failed",
-                stderr=e.stderr,
+                stderr=result.stderr,
                 command=cmd,
-            ) from e
+            )
+        return result.stdout.strip().split(".")[0]
 
     def poll_many(self, scheduler_job_ids: Sequence[str]) -> dict[str, JobState]:
         if not scheduler_job_ids:
@@ -538,74 +808,106 @@ class PBSScheduler:
         cmd = [self._opts.qstat_path] + list(scheduler_job_ids)
 
         try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, check=False, timeout=30
-            )
-            if not proc.stdout.strip():
-                return {}
+            result = self._transport.run(cmd, timeout=30)
+        except TransportError as e:
+            logger.warning("qstat invocation failed: %s", e)
+            return {}
+        if not result.stdout.strip():
+            return {}
 
-            wanted = set(scheduler_job_ids)
-            result: dict[str, JobState] = {}
-            for line in proc.stdout.strip().split("\n"):
-                line = line.strip()
-                if not line or line.startswith("-") or line.startswith("Job"):
-                    continue
-                parts = line.split()
-                if len(parts) < 5:
-                    continue
-                jid = parts[0].split(".")[0]
-                if jid in wanted:
-                    st = parts[4]
-                    state = _PBS_STATE_MAP.get(st)
-                    if state is not None:
-                        result[jid] = state
-            return result
-        except subprocess.TimeoutExpired:
-            logger.warning("qstat timed out for ids=%s", scheduler_job_ids)
-            return {}
-        except OSError as e:
-            logger.error("qstat invocation failed: %s", e)
-            return {}
+        wanted = set(scheduler_job_ids)
+        out: dict[str, JobState] = {}
+        for line in result.stdout.strip().split("\n"):
+            line = line.strip()
+            if not line or line.startswith("-") or line.startswith("Job"):
+                continue
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            jid = parts[0].split(".")[0]
+            if jid in wanted:
+                st = parts[4]
+                state = _PBS_STATE_MAP.get(st)
+                if state is not None:
+                    out[jid] = state
+        return out
 
     def cancel(self, scheduler_job_id: str) -> None:
-        subprocess.run(
-            [self._opts.qdel_path, scheduler_job_id],
-            capture_output=True,
-            timeout=30,
-        )
+        try:
+            self._transport.run(
+                [self._opts.qdel_path, scheduler_job_id], timeout=30,
+            )
+        except TransportError:
+            pass
 
     def resolve_terminal(self, scheduler_job_id: str) -> TerminalStatus | None:
         try:
-            proc = subprocess.run(
-                [self._opts.tracejob_path, scheduler_job_id],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=15,
+            result = self._transport.run(
+                [self._opts.tracejob_path, scheduler_job_id], timeout=15,
             )
-            if proc.returncode != 0 or not proc.stdout.strip():
-                return None
-
-            for line in proc.stdout.split("\n"):
-                if "Exit_status=" in line:
+        except TransportError:
+            return None
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        for line in result.stdout.split("\n"):
+            if "Exit_status=" in line:
+                try:
                     code = line.split("Exit_status=")[1].split()[0]
                     exit_code = int(code)
-                    if exit_code == 0:
-                        return TerminalStatus(state=JobState.SUCCEEDED, exit_code=0)
-                    if exit_code < 0:
-                        return TerminalStatus(
-                            state=JobState.CANCELLED,
-                            exit_code=exit_code,
-                            failure_reason=f"PBS job cancelled (exit {exit_code})",
-                        )
+                except (IndexError, ValueError):
+                    return None
+                if exit_code == 0:
+                    return TerminalStatus(state=JobState.SUCCEEDED, exit_code=0)
+                if exit_code < 0:
                     return TerminalStatus(
-                        state=JobState.FAILED,
+                        state=JobState.CANCELLED,
                         exit_code=exit_code,
-                        failure_reason=f"PBS job failed with exit code {exit_code}",
+                        failure_reason=f"PBS job cancelled (exit {exit_code})",
                     )
-            return None
-        except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
-            return None
+                return TerminalStatus(
+                    state=JobState.FAILED,
+                    exit_code=exit_code,
+                    failure_reason=f"PBS job failed with exit code {exit_code}",
+                )
+        return None
+
+    def list_queue(self, *, user: str | None = None) -> list[QueueEntry]:
+        target_user = user or os.environ.get("USER") or ""
+        cmd: list[str] = [self._opts.qstat_path]
+        if target_user:
+            cmd += ["-u", target_user]
+        try:
+            result = self._transport.run(cmd, timeout=30)
+        except TransportError as exc:
+            logger.warning("qstat invocation failed: %s", exc)
+            return []
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+        entries: list[QueueEntry] = []
+        for line in result.stdout.split("\n"):
+            line = line.strip()
+            if not line or line.startswith("-") or line.startswith("Job"):
+                continue
+            parts = line.split()
+            # Typical columns: id user queue jobname sessid nds tsk req_mem req_time s elap
+            if len(parts) < 10:
+                continue
+            jid = parts[0].split(".")[0]
+            usr = parts[1]
+            partition = parts[2]
+            name = parts[3]
+            raw_state = parts[9] if len(parts) > 9 else ""
+            entries.append(
+                QueueEntry(
+                    scheduler_job_id=jid,
+                    name=name or None,
+                    user=usr or None,
+                    state=_PBS_STATE_MAP.get(raw_state, JobState.QUEUED),
+                    raw_state=raw_state,
+                    partition=partition or None,
+                )
+            )
+        return entries
 
     def _generate_script(self, spec: JobSpec, job_dir: Path) -> Path:
         script_path = job_dir / "run_pbs.sh"
@@ -621,8 +923,7 @@ class PBSScheduler:
 
         lines.extend(_render_job_lines(spec, job_dir))
 
-        script_path.write_text("\n".join(lines) + "\n")
-        script_path.chmod(0o700)
+        self._transport.write_text(str(script_path), "\n".join(lines) + "\n", mode=0o700)
         return script_path
 
     def _map_resources(self, spec: JobSpec) -> dict[str, str]:
@@ -652,8 +953,8 @@ class PBSScheduler:
             mapped["-o"] = e.output_file
         if e.error_file:
             mapped["-e"] = e.error_file
-        if s.queue:
-            mapped["-q"] = s.queue
+        if s.partition:
+            mapped["-q"] = s.partition
         if s.account:
             mapped["-A"] = s.account
         if s.dependency:
@@ -680,10 +981,20 @@ _LSF_STATE_MAP: dict[str, JobState] = {
 
 
 class LSFScheduler:
-    """Submit and manage jobs via IBM Spectrum LSF."""
+    """Submit and manage jobs via IBM Spectrum LSF.
 
-    def __init__(self, options: LSFSchedulerOptions | None = None) -> None:
+    All shell calls (``bsub``, ``bjobs``, ``bkill``, ``bhist``) go through the
+    injected :class:`~molq.transport.Transport`.
+    """
+
+    def __init__(
+        self,
+        options: LSFSchedulerOptions | None = None,
+        *,
+        transport: Transport | None = None,
+    ) -> None:
         self._opts = options or LSFSchedulerOptions()
+        self._transport: Transport = transport or LocalTransport()
 
     def capabilities(self) -> SchedulerCapabilities:
         return SchedulerCapabilities(
@@ -697,7 +1008,7 @@ class LSFScheduler:
             supports_gpu_count=True,
             supports_gpu_type=True,
             supports_time_limit=True,
-            supports_queue=True,
+            supports_partition=True,
             supports_account=True,
             supports_dependency=True,
         )
@@ -707,28 +1018,27 @@ class LSFScheduler:
         cmd = [self._opts.bsub_path]
         cmd.extend(self._opts.extra_bsub_flags)
 
+        # bsub reads the job script from stdin.  Read it back via the same
+        # transport we just wrote it through so SSH-routed schedulers don't
+        # try to read a remote-only file from the local filesystem.
+        script_content = self._transport.read_text(str(script_path))
         try:
-            proc = subprocess.run(
-                cmd,
-                input=script_path.read_text(),
-                capture_output=True,
-                check=True,
-                text=True,
-                timeout=60,
-            )
-            match = re.search(r"Job <(\d+)>", proc.stdout)
-            if not match:
-                raise SchedulerError(
-                    f"Could not parse job ID from bsub output: {proc.stdout}",
-                    command=cmd,
-                )
-            return match.group(1)
-        except subprocess.CalledProcessError as e:
+            result = self._transport.run(cmd, input=script_content, timeout=60)
+        except TransportError as e:
+            raise SchedulerError("LSF submission timed out", command=cmd) from e
+        if result.returncode != 0:
             raise SchedulerError(
                 "LSF submission failed",
-                stderr=e.stderr,
+                stderr=result.stderr,
                 command=cmd,
-            ) from e
+            )
+        match = re.search(r"Job <(\d+)>", result.stdout)
+        if not match:
+            raise SchedulerError(
+                f"Could not parse job ID from bsub output: {result.stdout}",
+                command=cmd,
+            )
+        return match.group(1)
 
     def poll_many(self, scheduler_job_ids: Sequence[str]) -> dict[str, JobState]:
         if not scheduler_job_ids:
@@ -737,68 +1047,102 @@ class LSFScheduler:
         cmd = [self._opts.bjobs_path, "-noheader"] + list(scheduler_job_ids)
 
         try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, check=False, timeout=30
-            )
-            if not proc.stdout.strip():
-                return {}
+            result = self._transport.run(cmd, timeout=30)
+        except TransportError as e:
+            logger.warning("bjobs invocation failed: %s", e)
+            return {}
+        if not result.stdout.strip():
+            return {}
 
-            wanted = set(scheduler_job_ids)
-            result: dict[str, JobState] = {}
-            for line in proc.stdout.strip().split("\n"):
-                parts = line.split()
-                if len(parts) < 3:
-                    continue
-                jid = parts[0]
-                if jid in wanted:
-                    st = parts[2]
-                    state = _LSF_STATE_MAP.get(st)
-                    if state is not None:
-                        result[jid] = state
-            return result
-        except subprocess.TimeoutExpired:
-            logger.warning("bjobs timed out for ids=%s", scheduler_job_ids)
-            return {}
-        except OSError as e:
-            logger.error("bjobs invocation failed: %s", e)
-            return {}
+        wanted = set(scheduler_job_ids)
+        out: dict[str, JobState] = {}
+        for line in result.stdout.strip().split("\n"):
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            jid = parts[0]
+            if jid in wanted:
+                st = parts[2]
+                state = _LSF_STATE_MAP.get(st)
+                if state is not None:
+                    out[jid] = state
+        return out
 
     def cancel(self, scheduler_job_id: str) -> None:
-        subprocess.run(
-            [self._opts.bkill_path, scheduler_job_id],
-            capture_output=True,
-            timeout=30,
-        )
+        try:
+            self._transport.run(
+                [self._opts.bkill_path, scheduler_job_id], timeout=30,
+            )
+        except TransportError:
+            pass
 
     def resolve_terminal(self, scheduler_job_id: str) -> TerminalStatus | None:
         try:
-            proc = subprocess.run(
-                [self._opts.bhist_path, "-l", scheduler_job_id],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=15,
+            result = self._transport.run(
+                [self._opts.bhist_path, "-l", scheduler_job_id], timeout=15,
             )
-            if proc.returncode != 0 or not proc.stdout.strip():
-                return None
+        except TransportError:
+            return None
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
 
-            lower = proc.stdout.lower()
-            if "done" in lower:
-                return TerminalStatus(state=JobState.SUCCEEDED, raw_state="done")
-            match = re.search(r"exit code\s+(\d+)", lower)
-            if "exit" in lower:
-                code = int(match.group(1)) if match else None
-                return TerminalStatus(
-                    state=JobState.FAILED,
-                    exit_code=code,
-                    failure_reason=_default_failure_reason(
-                        JobState.FAILED, code, "exit"
-                    ),
-                    raw_state="exit",
+        lower = result.stdout.lower()
+        if "done" in lower:
+            return TerminalStatus(state=JobState.SUCCEEDED, raw_state="done")
+        match = re.search(r"exit code\s+(\d+)", lower)
+        if "exit" in lower:
+            code = int(match.group(1)) if match else None
+            return TerminalStatus(
+                state=JobState.FAILED,
+                exit_code=code,
+                failure_reason=_default_failure_reason(
+                    JobState.FAILED, code, "exit"
+                ),
+                raw_state="exit",
+            )
+        return None
+
+    def list_queue(self, *, user: str | None = None) -> list[QueueEntry]:
+        target_user = user or os.environ.get("USER") or ""
+        cmd: list[str] = [
+            self._opts.bjobs_path,
+            "-noheader",
+            "-o", "jobid stat job_name user queue submit_time start_time",
+        ]
+        if target_user:
+            cmd += ["-u", target_user]
+        try:
+            result = self._transport.run(cmd, timeout=30)
+        except TransportError as exc:
+            logger.warning("bjobs invocation failed: %s", exc)
+            return []
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+        entries: list[QueueEntry] = []
+        for line in result.stdout.strip().split("\n"):
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            jid = parts[0]
+            raw_state = parts[1]
+            name = parts[2]
+            usr = parts[3]
+            partition = parts[4]
+            sub_t = " ".join(parts[5:8]) if len(parts) >= 8 else ""
+            start_t = " ".join(parts[8:11]) if len(parts) >= 11 else ""
+            entries.append(
+                QueueEntry(
+                    scheduler_job_id=jid,
+                    name=None if name in ("-", "") else name,
+                    user=usr or None,
+                    state=_LSF_STATE_MAP.get(raw_state, JobState.QUEUED),
+                    raw_state=raw_state,
+                    partition=partition or None,
+                    submit_time=_parse_lsf_time(sub_t),
+                    start_time=_parse_lsf_time(start_t),
                 )
-            return None
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return None
+            )
+        return entries
 
     def _generate_script(self, spec: JobSpec, job_dir: Path) -> Path:
         script_path = job_dir / "run_lsf.sh"
@@ -810,16 +1154,15 @@ class LSFScheduler:
 
         lines.extend(_render_job_lines(spec, job_dir))
 
-        script_path.write_text("\n".join(lines) + "\n")
-        script_path.chmod(0o700)
+        self._transport.write_text(str(script_path), "\n".join(lines) + "\n", mode=0o700)
         return script_path
 
     def _map_resources(self, spec: JobSpec) -> dict[str, str]:
         mapped: dict[str, str] = {}
         r, s, e = spec.resources, spec.scheduling, spec.execution
 
-        if s.queue:
-            mapped["-q"] = s.queue
+        if s.partition:
+            mapped["-q"] = s.partition
         if r.cpu_count:
             mapped["-n"] = str(r.cpu_count)
         if r.memory:
@@ -856,23 +1199,44 @@ class LSFScheduler:
 def create_scheduler(
     scheduler_name: str,
     options: SchedulerOptions | None = None,
-) -> LocalScheduler | SlurmScheduler | PBSScheduler | LSFScheduler:
-    """Create a Scheduler implementation by name."""
+    *,
+    transport: Transport | None = None,
+) -> "LocalScheduler | ShellScheduler | SlurmScheduler | PBSScheduler | LSFScheduler":
+    """Create a Scheduler implementation by name.
+
+    The optional *transport* parameter routes shell/file ops through the given
+    :class:`~molq.transport.Transport`.  Defaults preserve pre-transport
+    behaviour: ``"local"`` ignores *transport* and uses the legacy
+    in-process :class:`LocalScheduler` (Popen + reaper); the new
+    transport-aware ``"shell"`` returns :class:`ShellScheduler` which works
+    over both :class:`~molq.transport.LocalTransport` and
+    :class:`~molq.transport.SshTransport`.
+    """
     if scheduler_name == "local":
+        # LocalScheduler keeps the original in-process Popen path; transport
+        # is intentionally ignored (it has no remote semantics by design).
         return LocalScheduler(
             options if isinstance(options, LocalSchedulerOptions) else None
         )
+    if scheduler_name == "shell":
+        return ShellScheduler(
+            options if isinstance(options, LocalSchedulerOptions) else None,
+            transport=transport,
+        )
     if scheduler_name == "slurm":
         return SlurmScheduler(
-            options if isinstance(options, SlurmSchedulerOptions) else None
+            options if isinstance(options, SlurmSchedulerOptions) else None,
+            transport=transport,
         )
     if scheduler_name == "pbs":
         return PBSScheduler(
-            options if isinstance(options, PBSSchedulerOptions) else None
+            options if isinstance(options, PBSSchedulerOptions) else None,
+            transport=transport,
         )
     if scheduler_name == "lsf":
         return LSFScheduler(
-            options if isinstance(options, LSFSchedulerOptions) else None
+            options if isinstance(options, LSFSchedulerOptions) else None,
+            transport=transport,
         )
     raise ValueError(f"Unknown scheduler: {scheduler_name!r}")
 
@@ -946,6 +1310,43 @@ def _parse_exit_code(field: str) -> int | None:
         return int(field.split(":")[0])
     except (ValueError, IndexError):
         return None
+
+
+_SLURM_TIME_FORMATS: tuple[str, ...] = ("%Y-%m-%dT%H:%M:%S",)
+_LSF_TIME_FORMATS: tuple[str, ...] = (
+    "%Y-%m-%dT%H:%M:%S",
+    "%b %d %H:%M %Y",
+    "%b %d %H:%M",
+)
+_QUEUE_TIME_SENTINELS = frozenset({"", "-", "N/A", "Unknown"})
+
+
+def _parse_queue_time(field: str, formats: tuple[str, ...]) -> float | None:
+    """Parse a scheduler timestamp; return None for sentinel values.
+
+    Year-less LSF timestamps are anchored to the current year so they match
+    the scheduler client's display behavior.
+    """
+    field = field.strip()
+    if field in _QUEUE_TIME_SENTINELS:
+        return None
+    for fmt in formats:
+        try:
+            ts = datetime.strptime(field, fmt)
+        except ValueError:
+            continue
+        if ts.year == 1900:
+            ts = ts.replace(year=datetime.now().year)
+        return ts.timestamp()
+    return None
+
+
+def _parse_slurm_time(field: str) -> float | None:
+    return _parse_queue_time(field, _SLURM_TIME_FORMATS)
+
+
+def _parse_lsf_time(field: str) -> float | None:
+    return _parse_queue_time(field, _LSF_TIME_FORMATS)
 
 
 def _default_failure_reason(

@@ -2,7 +2,7 @@
 
 Demonstrates:
   - Submitting a list of jobs in a loop
-  - submitor.watch([job_ids]) to block until all are terminal
+  - submitor.watch_jobs([job_ids]) to block until all are terminal
   - Iterating over final JobRecords
 """
 
@@ -17,7 +17,7 @@ PARAMS = [
 
 with make_submitor("hpc", job_duration=0.02) as s:
     handles = [
-        s.submit(
+        s.submit_job(
             argv=["python", "train.py", f"--lr={p['lr']}", f"--epochs={p['epochs']}"],
             metadata={"lr": str(p["lr"]), "epochs": str(p["epochs"])},
         )
@@ -26,7 +26,7 @@ with make_submitor("hpc", job_duration=0.02) as s:
 
     print(f"Submitted {len(handles)} jobs, waiting…")
 
-    records = s.watch([h.job_id for h in handles])
+    records = s.watch_jobs([h.job_id for h in handles])
 
     for rec in records:
         lr = rec.metadata.get("lr", "?")

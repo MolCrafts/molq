@@ -15,15 +15,15 @@ from molq.types import Script
 
 with make_submitor("demo", job_duration=0) as s:
     # 1. argv — recommended for structured commands
-    h = s.submit(argv=["python", "-c", "print('argv job')"])
+    h = s.submit_job(argv=["python", "-c", "print('argv job')"])
     print(f"argv    → {h.wait().state}")
 
     # 2. command — single-line shell string
-    h = s.submit(command="echo 'command job' && echo done")
+    h = s.submit_job(command="echo 'command job' && echo done")
     print(f"command → {h.wait().state}")
 
     # 3. Script.inline — multi-line bash/python script
-    h = s.submit(
+    h = s.submit_job(
         script=Script.inline(
             """\
 #!/bin/bash
@@ -41,7 +41,7 @@ echo "step 2"
         script_path = Path(f.name)
     script_path.chmod(0o755)
 
-    h = s.submit(script=Script.path(script_path))
+    h = s.submit_job(script=Script.path(script_path))
     print(f"path    → {h.wait().state}")
 
     script_path.unlink()

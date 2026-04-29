@@ -255,12 +255,12 @@ class TestJobResources:
 class TestJobScheduling:
     def test_defaults(self):
         s = JobScheduling()
-        assert s.queue is None
+        assert s.partition is None
         assert s.exclusive_node is False
 
     def test_with_values(self):
-        s = JobScheduling(queue="gpu", account="team-ml")
-        assert s.queue == "gpu"
+        s = JobScheduling(partition="gpu", account="team-ml")
+        assert s.partition == "gpu"
         assert s.account == "team-ml"
 
 

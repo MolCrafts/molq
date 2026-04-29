@@ -57,7 +57,7 @@ def deserialize_resources(data: dict[str, Any]) -> JobResources:
 
 def serialize_scheduling(scheduling: JobScheduling) -> dict[str, Any]:
     return {
-        "queue": scheduling.queue,
+        "partition": scheduling.partition,
         "account": scheduling.account,
         "priority": scheduling.priority,
         "dependency": scheduling.dependency,
@@ -79,7 +79,7 @@ def serialize_scheduling(scheduling: JobScheduling) -> dict[str, Any]:
 
 def deserialize_scheduling(data: dict[str, Any]) -> JobScheduling:
     return JobScheduling(
-        queue=data.get("queue"),
+        partition=data.get("partition", data.get("queue")),
         account=data.get("account"),
         priority=data.get("priority"),
         dependency=data.get("dependency"),

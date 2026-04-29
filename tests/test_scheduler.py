@@ -16,9 +16,12 @@ from molq.scheduler import (
     LocalScheduler,
     LSFScheduler,
     PBSScheduler,
+    QueueEntry,
+    ShellScheduler,
     SlurmScheduler,
     create_scheduler,
 )
+from molq.transport import LocalTransport
 from molq.status import JobState
 from molq.types import (
     Duration,
@@ -58,7 +61,7 @@ def _make_rich_spec() -> JobSpec:
             gpu_type="A100",
             time_limit=Duration.hours(4),
         ),
-        scheduling=JobScheduling(queue="gpu", account="team-ml"),
+        scheduling=JobScheduling(partition="gpu", account="team-ml"),
         execution=JobExecution(job_name="train_job"),
     )
 
@@ -212,8 +215,8 @@ class TestSlurmScheduler:
 
     @patch("molq.scheduler.subprocess.run")
     def test_submit_failure(self, mock_run, tmp_path: Path):
-        mock_run.side_effect = subprocess.CalledProcessError(
-            1, "sbatch", stderr="error: invalid partition"
+        mock_run.return_value = MagicMock(
+            stdout="", stderr="error: invalid partition", returncode=1
         )
         scheduler = SlurmScheduler()
         spec = _make_spec()
@@ -323,9 +326,7 @@ class TestPBSScheduler:
 
     @patch("molq.scheduler.subprocess.run")
     def test_submit_failure(self, mock_run, tmp_path: Path):
-        mock_run.side_effect = subprocess.CalledProcessError(
-            1, "qsub", stderr="qsub: error"
-        )
+        mock_run.return_value = MagicMock(stdout="", stderr="qsub: error", returncode=1)
         scheduler = PBSScheduler()
         job_dir = tmp_path / "job"
         job_dir.mkdir()
@@ -394,7 +395,7 @@ class TestLSFScheduler:
 
     @patch("molq.scheduler.subprocess.run")
     def test_submit_failure(self, mock_run, tmp_path: Path):
-        mock_run.side_effect = subprocess.CalledProcessError(1, "bsub", stderr="error")
+        mock_run.return_value = MagicMock(stdout="", stderr="error", returncode=1)
         scheduler = LSFScheduler()
         job_dir = tmp_path / "job"
         job_dir.mkdir()
@@ -469,3 +470,194 @@ class TestFactory:
         s = create_scheduler("slurm", opts)
         assert isinstance(s, SlurmScheduler)
         assert s._opts.sbatch_path == "/custom/sbatch"
+
+    def test_create_shell(self):
+        s = create_scheduler("shell")
+        assert isinstance(s, ShellScheduler)
+
+    def test_create_with_transport(self):
+        from molq.transport import SshTransport
+        from molq.options import SshTransportOptions
+
+        t = SshTransport(options=SshTransportOptions(host="cluster"))
+        s = create_scheduler("slurm", transport=t)
+        assert s._transport is t
+
+
+# ---------------------------------------------------------------------------
+# ShellScheduler — transport-aware "no batch system" dispatcher
+# ---------------------------------------------------------------------------
+
+
+class TestShellScheduler:
+    def test_default_transport_is_local(self):
+        s = ShellScheduler()
+        assert isinstance(s._transport, LocalTransport)
+
+    def test_submit_runs_real_process(self, tmp_path: Path):
+        """End-to-end: submit a trivial job and observe it complete."""
+        s = ShellScheduler()
+        spec = _make_spec(command="echo hello > out.txt")
+        job_dir = tmp_path / "job"
+        job_dir.mkdir()
+        spec = JobSpec(
+            job_id="x",
+            cluster_name="dev",
+            scheduler="shell",
+            command=spec.command,
+            execution=JobExecution(cwd=tmp_path),
+        )
+
+        pid = s.submit(spec, job_dir)
+        assert pid.isdigit()
+
+        # Wait for the wrapper's exit_code file to appear
+        import time
+        for _ in range(50):
+            if (job_dir / ".exit_code").exists():
+                break
+            time.sleep(0.05)
+
+        result = s.resolve_terminal_with_dir(pid, job_dir)
+        assert result is not None
+        assert result.state == JobState.SUCCEEDED
+        assert result.exit_code == 0
+        assert (tmp_path / "out.txt").read_text().strip() == "hello"
+
+    def test_submit_records_failure_exit_code(self, tmp_path: Path):
+        s = ShellScheduler()
+        job_dir = tmp_path / "job"
+        job_dir.mkdir()
+        spec = JobSpec(
+            job_id="x",
+            cluster_name="dev",
+            scheduler="shell",
+            command=Command.from_submit_args(command="exit 7"),
+            execution=JobExecution(cwd=tmp_path),
+        )
+        pid = s.submit(spec, job_dir)
+
+        import time
+        for _ in range(50):
+            if (job_dir / ".exit_code").exists():
+                break
+            time.sleep(0.05)
+
+        result = s.resolve_terminal_with_dir(pid, job_dir)
+        assert result.state == JobState.FAILED
+        assert result.exit_code == 7
+
+    def test_resolve_terminal_missing_file_returns_lost(self, tmp_path: Path):
+        s = ShellScheduler()
+        result = s.resolve_terminal_with_dir("123", tmp_path)
+        assert result.state == JobState.LOST
+
+    def test_poll_many_running(self, tmp_path: Path):
+        s = ShellScheduler()
+        spec = JobSpec(
+            job_id="x",
+            cluster_name="dev",
+            scheduler="shell",
+            command=Command.from_submit_args(command="sleep 5"),
+            execution=JobExecution(cwd=tmp_path),
+        )
+        job_dir = tmp_path / "job"
+        job_dir.mkdir()
+        pid = s.submit(spec, job_dir)
+        assert s.poll_many([pid]).get(pid) == JobState.RUNNING
+        s.cancel(pid)
+
+    def test_uses_injected_transport_for_polling(self, tmp_path: Path):
+        """Verify transport.run is called; doesn't matter what state we get back."""
+        from unittest.mock import MagicMock
+
+        from molq.transport import CommandResult
+
+        fake = MagicMock()
+        fake.run = MagicMock(return_value=CommandResult(
+            argv=("bash",), returncode=0, stdout="123=R\n", stderr="",
+        ))
+        s = ShellScheduler(transport=fake)
+        result = s.poll_many(["123"])
+        assert result == {"123": JobState.RUNNING}
+        fake.run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# list_queue (squeue / qstat / bjobs)
+# ---------------------------------------------------------------------------
+
+
+class TestListQueue:
+    def test_local_returns_empty(self):
+        assert LocalScheduler().list_queue() == []
+
+    def test_shell_returns_empty(self):
+        assert ShellScheduler().list_queue() == []
+
+    @patch("molq.scheduler.subprocess.run")
+    def test_slurm_parses_squeue_output(self, mock_run):
+        mock_run.return_value = MagicMock(
+            stdout=(
+                "12345|train_job|alice|R|gpu|2024-03-15T14:30:00|2024-03-15T14:31:00\n"
+                "12346|eval_job|alice|PD|gpu|2024-03-15T14:32:00|N/A\n"
+            ),
+            stderr="",
+            returncode=0,
+        )
+        entries = SlurmScheduler().list_queue()
+        assert len(entries) == 2
+        assert entries[0] == QueueEntry(
+            scheduler_job_id="12345",
+            name="train_job",
+            user="alice",
+            state=JobState.RUNNING,
+            raw_state="R",
+            partition="gpu",
+            submit_time=entries[0].submit_time,  # checked below
+            start_time=entries[0].start_time,
+        )
+        assert entries[0].submit_time is not None
+        assert entries[0].start_time is not None
+        assert entries[1].state == JobState.QUEUED
+        assert entries[1].start_time is None  # 'N/A' parsed as None
+
+    @patch("molq.scheduler.subprocess.run")
+    def test_slurm_handles_failure(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="", stderr="error", returncode=1)
+        assert SlurmScheduler().list_queue() == []
+
+    @patch("molq.scheduler.subprocess.run")
+    def test_pbs_parses_qstat_output(self, mock_run):
+        mock_run.return_value = MagicMock(
+            stdout=(
+                "Job id            User      Queue    Jobname    SessID NDS TSK Mem  Time S Elap\n"
+                "----------------  --------- -------- ---------  ------ --- --- ---- ---- - ----\n"
+                "12345.pbs01       alice     normal   train_job  1234   1   8   16gb 1:00 R 0:30\n"
+            ),
+            stderr="",
+            returncode=0,
+        )
+        entries = PBSScheduler().list_queue(user="alice")
+        assert len(entries) == 1
+        e = entries[0]
+        assert e.scheduler_job_id == "12345"
+        assert e.user == "alice"
+        assert e.partition == "normal"
+        assert e.name == "train_job"
+        assert e.state == JobState.RUNNING
+        assert e.raw_state == "R"
+
+    @patch("molq.scheduler.subprocess.run")
+    def test_lsf_parses_bjobs_output(self, mock_run):
+        mock_run.return_value = MagicMock(
+            stdout="12345 RUN train_job alice gpu Mar 15 14:30 Mar 15 14:31\n",
+            stderr="",
+            returncode=0,
+        )
+        entries = LSFScheduler().list_queue(user="alice")
+        assert len(entries) == 1
+        assert entries[0].scheduler_job_id == "12345"
+        assert entries[0].state == JobState.RUNNING
+        assert entries[0].partition == "gpu"
+        assert entries[0].name == "train_job"

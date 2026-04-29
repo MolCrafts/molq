@@ -35,7 +35,8 @@ Arguments:
 
 | Option | Description |
 |---|---|
-| `--queue` | Queue / partition name |
+| `--partition` | Scheduler partition (SLURM partition / PBS / LSF queue) |
+| `--queue` | Deprecated alias for `--partition` (one-release shim) |
 | `--account` | Billing account |
 
 **Execution options:**
@@ -78,7 +79,7 @@ Examples:
 # Basic submission
 molq submit local echo "hello"
 molq submit slurm --cpus 8 --mem 32G --time 4h python train.py
-molq submit slurm --gpus 2 --queue gpu --block python train.py
+molq submit slurm --gpus 2 --partition gpu --block python train.py
 
 # Retries
 molq submit slurm --retries 3 python train.py

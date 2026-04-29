@@ -130,10 +130,10 @@ class TestSubmitorDefaults:
     def test_with_values(self):
         d = SubmitorDefaults(
             resources=JobResources(cpu_count=4, memory=Memory.gb(8)),
-            scheduling=JobScheduling(queue="normal"),
+            scheduling=JobScheduling(partition="normal"),
         )
         assert d.resources.cpu_count == 4
-        assert d.scheduling.queue == "normal"
+        assert d.scheduling.partition == "normal"
         assert d.execution is None
 
     def test_frozen(self):

@@ -156,7 +156,7 @@ def mock_scheduler(mocker):
         supports_gpu_count=True,
         supports_gpu_type=True,
         supports_time_limit=True,
-        supports_queue=True,
+        supports_partition=True,
         supports_account=True,
         supports_priority=True,
         supports_dependency=True,

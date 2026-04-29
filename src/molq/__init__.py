@@ -2,21 +2,30 @@
 
 Usage::
 
-    from molq import Submitor, JobResources, Memory
+    from molq import Cluster, Submitor, JobResources, Memory
 
-    local = Submitor("devbox", "local")
+    # Destination — pure config, no lifecycle state.
+    cluster  = Cluster("devbox", "local")
 
-    job = local.submit(
+    # Lifecycle engine — bound to a target Cluster.
+    submitor = Submitor(target=cluster)
+
+    handle = submitor.submit_job(
         argv=["python", "train.py"],
         resources=JobResources(cpu_count=8, memory=Memory.gb(32)),
     )
-    print(job.status())
-    record = job.wait()
+    print(handle.status())
+    record = handle.wait()
     print(record.state)
+
+    # Scheduler-side queue snapshot:
+    cluster.get_queue()  # squeue --me / qstat -u $USER / bjobs (or [] for local)
 """
 
 from molq.callbacks import EventBus, EventPayload, EventType
+from molq.cluster import Cluster
 from molq.config import MolqConfig, MolqProfile, load_config, load_profile
+from molq.workspace import Project, Workspace
 from molq.dashboard import DashboardState, JobRow, MolqMonitor, RunDashboard
 from molq.errors import (
     CommandError,
@@ -46,7 +55,7 @@ from molq.options import (
     PBSSchedulerOptions,
     SlurmSchedulerOptions,
 )
-from molq.scheduler import SchedulerCapabilities
+from molq.scheduler import QueueEntry, SchedulerCapabilities
 from molq.status import JobState
 from molq.store import dependency_relation_state
 from molq.submitor import JobHandle, Submitor
@@ -71,8 +80,12 @@ __all__ = [
     "EventPayload",
     "EventType",
     # Core
+    "Cluster",
     "Submitor",
     "JobHandle",
+    "QueueEntry",
+    "Workspace",
+    "Project",
     # Types
     "Memory",
     "Duration",

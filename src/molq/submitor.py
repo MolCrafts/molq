@@ -11,9 +11,12 @@ import shutil
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from molq.callbacks import EventBus, EventPayload, EventType
+
+if TYPE_CHECKING:
+    from molq.cluster import Cluster
 from molq.config import load_profile
 from molq.errors import (
     ConfigError,
@@ -32,9 +35,8 @@ from molq.models import (
     SubmitorDefaults,
 )
 from molq.monitor import JobMonitor
-from molq.options import OPTIONS_TYPE_MAP, SchedulerOptions
 from molq.reconciler import JobReconciler
-from molq.scheduler import SchedulerCapabilities, create_scheduler
+from molq.scheduler import SchedulerCapabilities
 from molq.serde import (
     deserialize_execution,
     deserialize_resources,
@@ -51,6 +53,7 @@ from molq.serde import (
 )
 from molq.status import JobState
 from molq.store import JobStore
+from molq.transport import Transport
 from molq.types import DependencyRef, JobExecution, JobResources, JobScheduling, Script
 
 # ---------------------------------------------------------------------------
@@ -84,61 +87,48 @@ _LSF_DEP_KEYWORDS: dict[str, str] = {
 
 
 class Submitor:
-    """Unified interface for job submission and management.
+    """Lifecycle engine for submitted jobs.
 
-    Each instance represents a connection to a specific cluster.
+    A Submitor holds the persistence + monitoring half of molq's two-axis
+    model (the destination half is :class:`~molq.cluster.Cluster`).  Each
+    Submitor is bound to a single :class:`~molq.cluster.Cluster` as its
+    ``target`` at construction; submission, listing, cancellation, and
+    watching are all implicitly scoped to that target's name.
+
+    Multi-cluster on one process: instantiate one Submitor per Cluster.
+    They share a :class:`~molq.store.JobStore` by default and filter their
+    queries by ``target.name`` so they do not see each other's records.
 
     Args:
-        cluster_name: Identifies this cluster namespace.
-        scheduler: One of 'local', 'slurm', 'pbs', 'lsf'.
+        target: The destination Cluster.
         defaults: Default resource/scheduling/execution parameters.
-        scheduler_options: Scheduler-specific configuration.
-        store: Custom JobStore (default: ~/.molq/jobs.db).
-        jobs_dir: Optional override for per-job artifacts. When omitted,
+        store: Custom JobStore (default: ``~/.molq/jobs.db``).
+        jobs_dir: Optional override for per-job artifacts.  When omitted,
             materialized scripts and default logs are written under the
-            submission working directory at `.molq/jobs/<job-id>/`.
+            submission working directory at ``.molq/jobs/<job-id>/``.
     """
 
     def __init__(
         self,
-        cluster_name: str | None = None,
-        scheduler: str = "local",
+        target: "Cluster",
         *,
         defaults: SubmitorDefaults | None = None,
-        scheduler_options: SchedulerOptions | None = None,
         store: JobStore | None = None,
         jobs_dir: str | Path | None = None,
         default_retry_policy: RetryPolicy | None = None,
         retention_policy: RetentionPolicy | None = None,
         profile_name: str | None = None,
         event_bus: EventBus | None = None,
-        _scheduler: Any | None = None,
     ) -> None:
-        if cluster_name is None:
-            cluster_name = "default"
-        if _scheduler is None:
-            if scheduler not in OPTIONS_TYPE_MAP:
-                raise ConfigError(
-                    f"Unknown scheduler {scheduler!r}. "
-                    f"Must be one of: {', '.join(OPTIONS_TYPE_MAP)}",
-                    scheduler=scheduler,
-                )
+        from molq.cluster import Cluster
 
-            if scheduler_options is not None:
-                expected_type = OPTIONS_TYPE_MAP[scheduler]
-                if not isinstance(scheduler_options, expected_type):
-                    raise TypeError(
-                        f"scheduler_options must be {expected_type.__name__} "
-                        f"for scheduler {scheduler!r}, "
-                        f"got {type(scheduler_options).__name__}"
-                    )
-
-            self._scheduler_impl = create_scheduler(scheduler, scheduler_options)
-        else:
-            self._scheduler_impl = _scheduler
-
-        self._cluster_name = cluster_name
-        self._scheduler_name = scheduler
+        if not isinstance(target, Cluster):
+            raise TypeError(
+                f"Submitor.target must be a Cluster, got {type(target).__name__}. "
+                f"Construct a Cluster first: "
+                f"Submitor(target=Cluster(name, scheduler))"
+            )
+        self._target = target
         self._defaults = defaults
         self._store = store or JobStore()
         self._jobs_dir = self._resolve_jobs_dir(jobs_dir)
@@ -148,9 +138,9 @@ class Submitor:
         self._event_bus = event_bus or EventBus()
 
         self._reconciler = JobReconciler(
-            self._scheduler_impl,
+            target.scheduler_impl,
             self._store,
-            cluster_name,
+            target.name,
             jobs_dir=self._jobs_dir,
             event_bus=self._event_bus,
             on_terminal=self._handle_terminal_record,
@@ -162,27 +152,47 @@ class Submitor:
         cls,
         profile_name: str,
         *,
+        target: "Cluster | None" = None,
         config_path: str | Path | None = None,
         store: JobStore | None = None,
-        _scheduler: Any | None = None,
     ) -> Submitor:
+        """Load lifecycle parameters from a profile, bind to *target*.
+
+        If ``target`` is omitted, builds one via :meth:`Cluster.from_profile`.
+        """
+        from molq.cluster import Cluster
+
         profile = load_profile(profile_name, config_path)
+        if target is None:
+            target = Cluster.from_profile(profile_name, config_path=config_path)
         return cls(
-            profile.cluster_name,
-            profile.scheduler,
+            target,
             defaults=profile.defaults,
-            scheduler_options=profile.scheduler_options,
             store=store,
             jobs_dir=profile.jobs_dir,
             default_retry_policy=profile.retry,
             retention_policy=profile.retention,
             profile_name=profile.name,
-            _scheduler=_scheduler,
         )
 
     @property
+    def target(self) -> "Cluster":
+        return self._target
+
+    @property
     def cluster_name(self) -> str:
-        return self._cluster_name
+        return self._target.name
+
+    # `_scheduler_impl` and `_transport` are read-only views onto the bound
+    # Cluster.  Submitor is the only legitimate caller of the underlying
+    # protocol, so we keep them private.
+    @property
+    def _scheduler_impl(self) -> Any:
+        return self._target.scheduler_impl
+
+    @property
+    def _transport(self) -> Transport:
+        return self._target.transport
 
     @property
     def _monitor_instance(self) -> JobMonitor:
@@ -194,7 +204,7 @@ class Submitor:
     # Public API
     # ------------------------------------------------------------------
 
-    def submit(
+    def submit_job(
         self,
         *,
         argv: list[str] | None = None,
@@ -250,7 +260,7 @@ class Submitor:
         )
         return handle
 
-    def get(self, job_id: str) -> JobRecord:
+    def get_job(self, job_id: str) -> JobRecord:
         """Get a job record by ID.
 
         Raises:
@@ -258,53 +268,53 @@ class Submitor:
         """
         record = self._store.get_record(job_id)
         if record is None:
-            raise JobNotFoundError(job_id, self._cluster_name)
+            raise JobNotFoundError(job_id, self._target.name)
         return record
 
-    def list(self, include_terminal: bool = False) -> list[JobRecord]:
+    def list_jobs(self, include_terminal: bool = False) -> list[JobRecord]:
         """List jobs for this cluster."""
         return self._store.list_records(
-            self._cluster_name, include_terminal=include_terminal
+            self._target.name, include_terminal=include_terminal
         )
 
     def get_transitions(self, job_id: str) -> list[StatusTransition]:
         """Return the persisted transition timeline for a job."""
         record = self._store.get_record(job_id)
         if record is None:
-            raise JobNotFoundError(job_id, self._cluster_name)
+            raise JobNotFoundError(job_id, self._target.name)
         return self._store.get_transitions(job_id)
 
     def get_retry_family(self, job_id: str) -> list[JobRecord]:
         record = self._store.get_record(job_id)
         if record is None:
-            raise JobNotFoundError(job_id, self._cluster_name)
+            raise JobNotFoundError(job_id, self._target.name)
         return self._store.get_retry_family(job_id)
 
     def get_dependencies(self, job_id: str) -> list[JobDependency]:
         record = self._store.get_record(job_id)
         if record is None:
-            raise JobNotFoundError(job_id, self._cluster_name)
+            raise JobNotFoundError(job_id, self._target.name)
         return self._store.get_dependencies(job_id)
 
     def get_dependents(self, job_id: str) -> list[JobDependency]:
         record = self._store.get_record(job_id)
         if record is None:
-            raise JobNotFoundError(job_id, self._cluster_name)
+            raise JobNotFoundError(job_id, self._target.name)
         return self._store.get_dependents(job_id)
 
     def get_dependency_preview(self, job_id: str) -> object:
         record = self._store.get_record(job_id)
         if record is None:
-            raise JobNotFoundError(job_id, self._cluster_name)
+            raise JobNotFoundError(job_id, self._target.name)
         return self._store.get_dependency_previews([job_id]).get(job_id)
 
-    def on(self, event: EventType, handler: Any) -> None:
+    def on_event(self, event: EventType, handler: Any) -> None:
         self._event_bus.on(event, handler)
 
-    def off(self, event: EventType, handler: Any) -> None:
+    def off_event(self, event: EventType, handler: Any) -> None:
         self._event_bus.off(event, handler)
 
-    def watch(
+    def watch_jobs(
         self,
         job_ids: list[str] | None = None,
         *,
@@ -313,15 +323,15 @@ class Submitor:
         """Block until specified jobs (or all active) reach terminal state."""
         return self._monitor_instance.wait_many(
             job_ids,
-            self._cluster_name,
+            self._target.name,
             timeout=timeout,
         )
 
-    def cancel(self, job_id: str) -> None:
+    def cancel_job(self, job_id: str) -> None:
         """Cancel a job."""
         record = self._store.get_latest_attempt_record(job_id)
         if record is None:
-            raise JobNotFoundError(job_id, self._cluster_name)
+            raise JobNotFoundError(job_id, self._target.name)
 
         if record.scheduler_job_id:
             self._scheduler_impl.cancel(record.scheduler_job_id)
@@ -343,11 +353,11 @@ class Submitor:
             reason="cancelled by user",
         )
 
-    def refresh(self) -> None:
+    def refresh_jobs(self) -> None:
         """Reconcile all active jobs with the scheduler."""
         self._reconciler.reconcile()
 
-    def cleanup(
+    def cleanup_jobs(
         self,
         *,
         dry_run: bool = False,
@@ -358,7 +368,7 @@ class Submitor:
         job_dir_cutoff = now - policy.keep_job_dirs_for_days * 86400
         record_cutoff = now - policy.keep_terminal_records_for_days * 86400
         artifact_candidates, record_candidates = self._store.list_cleanup_candidates(
-            self._cluster_name,
+            self._target.name,
             job_dir_cutoff=job_dir_cutoff,
             record_cutoff=record_cutoff,
             include_failed_job_dirs=not policy.keep_failed_job_dirs,
@@ -382,7 +392,7 @@ class Submitor:
 
         return {"job_dirs": deleted_dirs, "records": deleted_records}
 
-    def daemon(
+    def run_daemon(
         self,
         *,
         once: bool = False,
@@ -390,9 +400,9 @@ class Submitor:
         run_cleanup: bool = True,
     ) -> None:
         while True:
-            self.refresh()
+            self.refresh_jobs()
             if run_cleanup:
-                self.cleanup(dry_run=False)
+                self.cleanup_jobs(dry_run=False)
             if once:
                 return
             time.sleep(interval)
@@ -427,11 +437,16 @@ class Submitor:
     # ------------------------------------------------------------------
 
     def _materialize_script(self, script: Script, job_dir: Path) -> None:
-        """Prepare script files in the job directory."""
+        """Prepare script files in the job directory.
+
+        Reads the user's script from the local filesystem and writes it into
+        ``job_dir`` via the transport — so for an :class:`SshTransport` the
+        materialised copy lands on the remote host.
+        """
         if script.variant == "path" and script.file_path:
             target = job_dir / "user_script.sh"
-            shutil.copy2(script.file_path, target)
-            target.chmod(0o700)
+            content = Path(script.file_path).read_bytes()
+            self._transport.write_bytes(str(target), content, mode=0o700)
 
     def _resolve_jobs_dir(self, jobs_dir: str | Path | None) -> Path | None:
         if jobs_dir is not None:
@@ -449,9 +464,17 @@ class Submitor:
         dir_name: str | None = None,
     ) -> Path:
         jobs_dir = self._job_dir_root(cwd)
-        jobs_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._transport.mkdir(str(jobs_dir), parents=True, exist_ok=True)
         job_dir = self._job_dir_path(job_id, cwd, dir_name)
-        job_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._transport.mkdir(str(job_dir), parents=True, exist_ok=True)
+        # mode=0o700 is honoured by LocalTransport-backed pathlib only on
+        # creation; for SshTransport mkdir uses the remote umask.  Set it
+        # explicitly so both paths converge.
+        try:
+            self._transport.chmod(str(job_dir), 0o700)
+        except Exception:
+            # chmod failures are non-fatal — directory exists and is usable.
+            pass
         return job_dir
 
     def _job_dir_root(self, cwd: str) -> Path:
@@ -589,8 +612,8 @@ class Submitor:
 
         spec = JobSpec(
             job_id=job_id,
-            cluster_name=self._cluster_name,
-            scheduler=self._scheduler_name,
+            cluster_name=self._target.name,
+            scheduler=self._target.scheduler,
             command=cmd,
             resources=merged_resources,
             scheduling=merged_scheduling,
@@ -684,8 +707,8 @@ class Submitor:
         return (
             JobHandle(
                 job_id=root_job_id,
-                cluster_name=self._cluster_name,
-                scheduler=self._scheduler_name,
+                cluster_name=self._target.name,
+                scheduler=self._target.scheduler,
                 scheduler_job_id=scheduler_job_id,
                 _state=JobState.SUBMITTED,
                 _submitor=self,
@@ -736,8 +759,8 @@ class Submitor:
         caps = self._scheduler_capabilities()
         if not caps.supports_dependency:
             raise ConfigError(
-                f"Scheduler {self._scheduler_name!r} does not support job dependencies",
-                scheduler=self._scheduler_name,
+                f"Scheduler {self._target.scheduler!r} does not support job dependencies",
+                scheduler=self._target.scheduler,
             )
 
         seen: set[tuple[str, str]] = set()
@@ -760,17 +783,17 @@ class Submitor:
 
             dep_record = self._store.get_latest_attempt_record(dep_job_id)
             if dep_record is None:
-                raise JobNotFoundError(dep_job_id, self._cluster_name)
-            if dep_record.scheduler != self._scheduler_name:
+                raise JobNotFoundError(dep_job_id, self._target.name)
+            if dep_record.scheduler != self._target.scheduler:
                 raise ConfigError(
                     f"Dependency job {dep_job_id!r} belongs to scheduler"
-                    f" {dep_record.scheduler!r}, not {self._scheduler_name!r}",
+                    f" {dep_record.scheduler!r}, not {self._target.scheduler!r}",
                     dependency_job_id=dep_job_id,
                 )
-            if dep_record.cluster_name != self._cluster_name:
+            if dep_record.cluster_name != self._target.name:
                 raise ConfigError(
                     f"Dependency job {dep_job_id!r} belongs to cluster"
-                    f" {dep_record.cluster_name!r}, not {self._cluster_name!r}",
+                    f" {dep_record.cluster_name!r}, not {self._target.name!r}",
                     dependency_job_id=dep_job_id,
                 )
             if dep_record.scheduler_job_id is None:
@@ -794,47 +817,47 @@ class Submitor:
 
     def _format_single_dep(self, condition: str, scheduler_job_id: str) -> str:
         """Format one (condition, jobid) edge for storage in job_dependencies."""
-        if self._scheduler_name == "slurm":
+        if self._target.scheduler == "slurm":
             kw = _SLURM_DEP_KEYWORDS.get(condition)
             if kw is None:
                 raise ConfigError(
                     f"Unsupported dependency condition {condition!r}",
-                    scheduler=self._scheduler_name,
+                    scheduler=self._target.scheduler,
                 )
             return f"{kw}:{scheduler_job_id}"
-        if self._scheduler_name == "pbs":
+        if self._target.scheduler == "pbs":
             kw = _PBS_DEP_KEYWORDS.get(condition)
             if kw is None:
                 raise ConfigError(
                     f"Unsupported dependency condition {condition!r}",
-                    scheduler=self._scheduler_name,
+                    scheduler=self._target.scheduler,
                 )
             return f"{kw}:{scheduler_job_id}"
-        if self._scheduler_name == "lsf":
+        if self._target.scheduler == "lsf":
             kw = _LSF_DEP_KEYWORDS.get(condition)
             if kw is None:
                 raise ConfigError(
                     f"Unsupported dependency condition {condition!r}",
-                    scheduler=self._scheduler_name,
+                    scheduler=self._target.scheduler,
                 )
             return f"{kw}({scheduler_job_id})"
         return f"{condition}:{scheduler_job_id}"
 
     def _format_dep_string(self, pairs: list[tuple[str, str]]) -> str:
         """Format the complete dependency string for scheduling.dependency."""
-        if self._scheduler_name == "slurm":
+        if self._target.scheduler == "slurm":
             parts: list[str] = []
             for condition, sid in pairs:
                 kw = _SLURM_DEP_KEYWORDS.get(condition)
                 if kw is None:
                     raise ConfigError(
                         f"Unsupported dependency condition {condition!r}",
-                        scheduler=self._scheduler_name,
+                        scheduler=self._target.scheduler,
                     )
                 parts.append(f"{kw}:{sid}")
             return ",".join(parts)
 
-        if self._scheduler_name == "pbs":
+        if self._target.scheduler == "pbs":
             # PBS groups IDs by type: afterok:123:456,afternotok:789
             groups: dict[str, list[str]] = {}
             for condition, sid in pairs:
@@ -842,12 +865,12 @@ class Submitor:
                 if kw is None:
                     raise ConfigError(
                         f"Unsupported dependency condition {condition!r}",
-                        scheduler=self._scheduler_name,
+                        scheduler=self._target.scheduler,
                     )
                 groups.setdefault(kw, []).append(sid)
             return ",".join(f"{kw}:{':'.join(sids)}" for kw, sids in groups.items())
 
-        if self._scheduler_name == "lsf":
+        if self._target.scheduler == "lsf":
             # LSF: done(123) && done(456) && exit(789)
             exprs: list[str] = []
             for condition, sid in pairs:
@@ -855,7 +878,7 @@ class Submitor:
                 if kw is None:
                     raise ConfigError(
                         f"Unsupported dependency condition {condition!r}",
-                        scheduler=self._scheduler_name,
+                        scheduler=self._target.scheduler,
                     )
                 exprs.append(f"{kw}({sid})")
             return " && ".join(exprs)
@@ -865,7 +888,8 @@ class Submitor:
     def _write_manifest(self, spec: JobSpec) -> None:
         job_dir = self._job_dir_path(spec.job_id, spec.cwd, spec.dir_name)
         manifest_path = job_dir / "manifest.json"
-        manifest_path.write_text(
+        self._transport.write_text(
+            str(manifest_path),
             json.dumps(
                 {
                     "job_id": spec.job_id,
@@ -880,7 +904,8 @@ class Submitor:
                     "created_at": time.time(),
                 },
                 sort_keys=True,
-            )
+            ),
+            mode=0o600,
         )
 
     def _emit_status_change(
@@ -1039,7 +1064,11 @@ class Submitor:
             capabilities.supports_time_limit,
             r.time_limit is not None,
         )
-        require("scheduling.queue", capabilities.supports_queue, s.queue is not None)
+        require(
+            "scheduling.partition",
+            capabilities.supports_partition,
+            s.partition is not None,
+        )
         require(
             "scheduling.account", capabilities.supports_account, s.account is not None
         )
@@ -1079,8 +1108,8 @@ class Submitor:
         if unsupported:
             fields = ", ".join(unsupported)
             raise ConfigError(
-                f"Scheduler {self._scheduler_name!r} does not support requested fields: {fields}",
-                scheduler=self._scheduler_name,
+                f"Scheduler {self._target.scheduler!r} does not support requested fields: {fields}",
+                scheduler=self._target.scheduler,
                 unsupported_fields=tuple(unsupported),
             )
 
@@ -1098,7 +1127,7 @@ class Submitor:
             supports_gpu_count=True,
             supports_gpu_type=True,
             supports_time_limit=True,
-            supports_queue=True,
+            supports_partition=True,
             supports_account=True,
             supports_priority=True,
             supports_dependency=True,
@@ -1155,5 +1184,5 @@ class JobHandle:
 
     def cancel(self) -> None:
         """Cancel this job."""
-        self._submitor.cancel(self.job_id)
+        self._submitor.cancel_job(self.job_id)
         self._state = JobState.CANCELLED

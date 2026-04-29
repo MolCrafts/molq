@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
     logdir.mkdir()
 
     with make_submitor("demo", job_duration=0) as s:
-        handle = s.submit(
+        handle = s.submit_job(
             argv=["python", "train.py", "--epochs", "100"],
             execution=JobExecution(
                 env={
