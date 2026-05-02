@@ -7,18 +7,21 @@ scheduler-specific behavior to scheduler implementations behind the
 
 ## Supported schedulers
 
-| Scheduler  | Use case                                                    | Option type             |
-|----------|-------------------------------------------------------------|-------------------------|
-| `local`  | In-process subprocess (legacy local executor)               | `LocalSchedulerOptions` |
-| `shell`  | Shell-based local **or** remote execution (Transport-aware) | —                       |
-| `slurm`  | SLURM clusters                                              | `SlurmSchedulerOptions` |
-| `pbs`    | PBS or Torque clusters                                      | `PBSSchedulerOptions`   |
-| `lsf`    | IBM Spectrum LSF clusters                                   | `LSFSchedulerOptions`   |
+| Scheduler  | Use case                                                  | Option type             |
+|----------|-----------------------------------------------------------|-------------------------|
+| `local`  | No batch system — just run it (Transport decides *where*) | `LocalSchedulerOptions` |
+| `slurm`  | SLURM clusters                                            | `SlurmSchedulerOptions` |
+| `pbs`    | PBS or Torque clusters                                    | `PBSSchedulerOptions`   |
+| `lsf`    | IBM Spectrum LSF clusters                                 | `LSFSchedulerOptions`   |
 
-> **Scheduler × Transport.** Each scheduler works with any `Transport`. To run
-> SLURM on a remote cluster, pass `host=` (or a custom `transport=`) —
-> molq's SLURM code shells `sbatch` / `squeue` / `scancel` / `sacct`
-> through the Transport. Same for PBS and LSF. See [Concepts](concepts.md#transport--physical-where-commands-run).
+> **Scheduler × Transport.** Each scheduler works with any `Transport`. The
+> `local` scheduler has no batch system of its own; pair it with
+> `LocalTransport` (default) to run on this host or with `SshTransport`
+> (via `host="..."` or `transport=...`) to run on a remote workstation that
+> has no queue manager. The batch schedulers shell `sbatch` / `qsub` /
+> `bsub` (and friends) through whatever Transport you give them — same
+> code path for local SLURM and remote SLURM. See
+> [Concepts](concepts.md#transport--physical-where-commands-run).
 
 ## Constructing a Cluster
 
@@ -41,13 +44,19 @@ Pass a scheduler-specific options object through `scheduler_options=`.
 
 ### Local
 
+`scheduler="local"` is the no-batch-system backend. The transport decides
+whether jobs run on this host or on a remote workstation:
+
 ```python
-mq.Cluster(
-    "dev",
-    "local",
-    scheduler_options=mq.LocalSchedulerOptions(),
-)
+# On this host (default — LocalTransport):
+mq.Cluster("dev", "local")
+
+# On a remote workstation that has no queue manager:
+mq.Cluster("workstation", "local", host="user@workstation.example")
 ```
+
+`LocalSchedulerOptions` currently has no fields; pass it for symmetry with
+the other backends if a profile loader requires it.
 
 ### SLURM
 
@@ -195,7 +204,6 @@ queue:
 | Scheduler  | Underlying command     | Notes                              |
 |----------|------------------------|------------------------------------|
 | `local`  | —                      | Returns `[]` (no shared queue)     |
-| `shell`  | —                      | Returns `[]` (no shared queue)     |
 | `slurm`  | `squeue --me ...`      | Override user with `user=...`      |
 | `pbs`    | `qstat -u $USER`       |                                    |
 | `lsf`    | `bjobs -u $USER ...`   |                                    |

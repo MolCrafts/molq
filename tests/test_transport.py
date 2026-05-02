@@ -27,7 +27,6 @@ from molq.transport import (
     TransportError,
 )
 
-
 # ---------------------------------------------------------------------------
 # Protocol conformance
 # ---------------------------------------------------------------------------
@@ -73,7 +72,9 @@ def test_local_run_check_returncode_raises() -> None:
 
 def test_local_run_passes_cwd(tmp_path: Path) -> None:
     t = LocalTransport()
-    result = t.run([sys.executable, "-c", "import os; print(os.getcwd())"], cwd=str(tmp_path))
+    result = t.run(
+        [sys.executable, "-c", "import os; print(os.getcwd())"], cwd=str(tmp_path)
+    )
     assert result.returncode == 0
     assert result.stdout.strip() == str(tmp_path)
 
@@ -90,7 +91,10 @@ def test_local_run_passes_env() -> None:
 
 def test_local_run_passes_input() -> None:
     t = LocalTransport()
-    result = t.run([sys.executable, "-c", "import sys; print(sys.stdin.read().upper())"], input="hi")
+    result = t.run(
+        [sys.executable, "-c", "import sys; print(sys.stdin.read().upper())"],
+        input="hi",
+    )
     assert result.returncode == 0
     assert result.stdout.strip() == "HI"
 
@@ -351,7 +355,9 @@ def test_ssh_exists_returns_false_on_one(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_ssh_exists_other_returncode_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "molq.transport.subprocess.run",
-        lambda *a, **kw: type("P", (), {"returncode": 255, "stdout": "", "stderr": "boom"})(),
+        lambda *a, **kw: type(
+            "P", (), {"returncode": 255, "stdout": "", "stderr": "boom"}
+        )(),
     )
     t = SshTransport(options=SshTransportOptions(host="h"))
     with pytest.raises(TransportError):
@@ -363,17 +369,27 @@ def test_ssh_read_text_decodes_base64(monkeypatch: pytest.MonkeyPatch) -> None:
     encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
     monkeypatch.setattr(
         "molq.transport.subprocess.run",
-        lambda *a, **kw: type("P", (), {"returncode": 0, "stdout": encoded, "stderr": ""})(),
+        lambda *a, **kw: type(
+            "P", (), {"returncode": 0, "stdout": encoded, "stderr": ""}
+        )(),
     )
     t = SshTransport(options=SshTransportOptions(host="h"))
     assert t.read_text("/x") == payload
 
 
-def test_ssh_read_text_missing_raises_filenotfound(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ssh_read_text_missing_raises_filenotfound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         "molq.transport.subprocess.run",
         lambda *a, **kw: type(
-            "P", (), {"returncode": 1, "stdout": "", "stderr": "base64: /x: No such file or directory\n"}
+            "P",
+            (),
+            {
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "base64: /x: No such file or directory\n",
+            },
         )(),
     )
     t = SshTransport(options=SshTransportOptions(host="h"))
@@ -404,7 +420,7 @@ def test_ssh_write_text_pipes_base64(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "base64 -d" in remote
     assert "'/path with space/x'" in remote
     assert "chmod 600" in remote
-    assert captured["input"] == base64.b64encode("héllo".encode("utf-8")).decode("ascii")
+    assert captured["input"] == base64.b64encode("héllo".encode()).decode("ascii")
 
 
 def test_ssh_mkdir_uses_p_flag(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -431,7 +447,9 @@ def test_ssh_mkdir_uses_p_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "mkdir -p /plain/path" in captured["argv"][-1]
 
 
-def test_ssh_upload_invokes_rsync(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_ssh_upload_invokes_rsync(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     captured: dict = {}
 
     def fake_run(argv, **kwargs):
@@ -471,8 +489,10 @@ SSH_TEST_HOST = os.environ.get("MOLQ_SSH_TEST_HOST")
 
 
 @pytest.mark.skipif(SSH_TEST_HOST is None, reason="set MOLQ_SSH_TEST_HOST to enable")
-@pytest.mark.skipif(shutil.which("ssh") is None or shutil.which("rsync") is None,
-                    reason="ssh or rsync not installed")
+@pytest.mark.skipif(
+    shutil.which("ssh") is None or shutil.which("rsync") is None,
+    reason="ssh or rsync not installed",
+)
 def test_ssh_round_trip_against_real_host(tmp_path: Path) -> None:
     t = SshTransport(options=SshTransportOptions(host=SSH_TEST_HOST))  # type: ignore[arg-type]
     remote_dir = "/tmp/molq-test-roundtrip"

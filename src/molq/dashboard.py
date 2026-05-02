@@ -29,6 +29,7 @@ import time
 import tty
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from rich.console import Console, Group
 from rich.layout import Layout
@@ -37,6 +38,9 @@ from rich.panel import Panel
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskProgressColumn
 from rich.table import Table
 from rich.text import Text
+
+if TYPE_CHECKING:
+    from molq.store import JobStore
 
 # ── Data models ──────────────────────────────────────────────────────────────
 
@@ -568,7 +572,7 @@ class MolqMonitor:
         finally:
             store.close()
 
-    def _run_dashboard(self, store: object) -> None:
+    def _run_dashboard(self, store: JobStore) -> None:
         from datetime import datetime
 
         from molq.status import JobState

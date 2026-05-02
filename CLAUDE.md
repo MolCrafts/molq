@@ -51,7 +51,8 @@ Three-layer architecture:
 
 2. **Scheduler Layer** (`scheduler.py`):
    - `Scheduler` Protocol: `submit()`, `poll_many()`, `cancel()`, `resolve_terminal()`
-   - Implementations: `LocalScheduler`, `SlurmScheduler`, `PBSScheduler`, `LSFScheduler`
+   - Implementations: `ShellScheduler` (the backend for `scheduler="local"` — no batch system, transport decides where), `SlurmScheduler`, `PBSScheduler`, `LSFScheduler`
+   - All four implementations route every shell call through `self._transport.run(...)`, so any `Scheduler × Transport` combination works
    - Script generation absorbed into each scheduler (not a separate protocol)
 
 3. **Persistence Layer** (`store.py`):
@@ -110,7 +111,7 @@ Three mutually exclusive command types:
 
 - Fixtures in `conftest.py`: `temp_workdir`, `tmp_molq_home`, `mock_job_environment`
 - JobStore tests use `:memory:` SQLite or `tmp_path` file databases (no mocking SQLite)
-- Scheduler tests mock `subprocess.run` / `subprocess.Popen`
+- Scheduler tests mock `molq.transport.subprocess.run` (the call site for every Scheduler/Transport combination)
 - Submitor tests mock the Scheduler protocol via `unittest.mock.MagicMock`
 - Script.path tests use `tmp_path` with real files
 

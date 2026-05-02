@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from molq.cluster import Cluster
 from molq.errors import (
     CommandError,
     ConfigError,
@@ -14,7 +15,6 @@ from molq.errors import (
 from molq.models import RetryBackoff, RetryPolicy, SubmitorDefaults
 from molq.options import LocalSchedulerOptions, SlurmSchedulerOptions
 from molq.status import JobState
-from molq.cluster import Cluster
 from molq.submitor import Submitor
 from molq.testing import make_submitor
 from molq.types import (
@@ -30,7 +30,10 @@ from molq.types import (
 @pytest.fixture
 def submitor(memory_store, mock_scheduler):
     """Submitor with mocked scheduler and in-memory store."""
-    return Submitor(target=Cluster("dev", "local", _scheduler_impl=mock_scheduler), store=memory_store)
+    return Submitor(
+        target=Cluster("dev", "local", _scheduler_impl=mock_scheduler),
+        store=memory_store,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +43,10 @@ def submitor(memory_store, mock_scheduler):
 
 class TestSubmitorInit:
     def test_valid_scheduler(self, memory_store, mocker):
-        s = Submitor(target=Cluster("dev", "local", _scheduler_impl=mocker.MagicMock()), store=memory_store)
+        s = Submitor(
+            target=Cluster("dev", "local", _scheduler_impl=mocker.MagicMock()),
+            store=memory_store,
+        )
         assert s.cluster_name == "dev"
 
     def test_invalid_scheduler_raises(self, memory_store):
@@ -49,16 +55,30 @@ class TestSubmitorInit:
 
     def test_mismatched_options_raises(self, memory_store):
         with pytest.raises(TypeError, match="LocalSchedulerOptions"):
-            Submitor(target=Cluster("dev", "local", scheduler_options=SlurmSchedulerOptions()), store=memory_store)
+            Submitor(
+                target=Cluster(
+                    "dev", "local", scheduler_options=SlurmSchedulerOptions()
+                ),
+                store=memory_store,
+            )
 
     def test_correct_options_accepted(self, memory_store, mocker):
         mocker.patch("molq.cluster.create_scheduler")
-        s = Submitor(target=Cluster("dev", "local", scheduler_options=LocalSchedulerOptions()), store=memory_store)
+        s = Submitor(
+            target=Cluster("dev", "local", scheduler_options=LocalSchedulerOptions()),
+            store=memory_store,
+        )
         assert s.cluster_name == "dev"
 
     def test_instances_independent(self, memory_store, mocker):
-        s1 = Submitor(target=Cluster("dev1", "local", _scheduler_impl=mocker.MagicMock()), store=memory_store)
-        s2 = Submitor(target=Cluster("dev2", "local", _scheduler_impl=mocker.MagicMock()), store=memory_store)
+        s1 = Submitor(
+            target=Cluster("dev1", "local", _scheduler_impl=mocker.MagicMock()),
+            store=memory_store,
+        )
+        s2 = Submitor(
+            target=Cluster("dev2", "local", _scheduler_impl=mocker.MagicMock()),
+            store=memory_store,
+        )
         assert s1.cluster_name != s2.cluster_name
 
 
@@ -113,7 +133,11 @@ class TestSubmit:
             resources=JobResources(cpu_count=4),
             scheduling=JobScheduling(partition="normal"),
         )
-        s = Submitor(target=Cluster("dev", "local", _scheduler_impl=mock_scheduler), defaults=defaults, store=memory_store)
+        s = Submitor(
+            target=Cluster("dev", "local", _scheduler_impl=mock_scheduler),
+            defaults=defaults,
+            store=memory_store,
+        )
         handle = s.submit_job(argv=["echo"])
         record = s.get_job(handle.job_id)
         assert record is not None
@@ -138,7 +162,10 @@ class TestSubmit:
 
         scheduler = MagicMock()
         scheduler.submit.return_value = "12345"
-        s = Submitor(target=Cluster("dev", "local", _scheduler_impl=scheduler), store=memory_store)
+        s = Submitor(
+            target=Cluster("dev", "local", _scheduler_impl=scheduler),
+            store=memory_store,
+        )
         handle = s.submit_job(argv=["echo", "hello"])
 
         record = s.get_job(handle.job_id)
@@ -159,7 +186,10 @@ class TestSubmit:
 
         scheduler = MagicMock()
         scheduler.submit.return_value = "12345"
-        s = Submitor(target=Cluster("dev", "local", _scheduler_impl=scheduler), store=memory_store)
+        s = Submitor(
+            target=Cluster("dev", "local", _scheduler_impl=scheduler),
+            store=memory_store,
+        )
         handle = s.submit_job(
             argv=["echo", "hello"],
             execution=JobExecution(cwd=str(submit_cwd)),
@@ -208,7 +238,10 @@ class TestSubmit:
         assert handle.status() == JobState.SUBMITTED
 
     def test_submit_persists_dependencies(self, memory_store, mock_scheduler):
-        s = Submitor(target=Cluster("dev", "slurm", _scheduler_impl=mock_scheduler), store=memory_store)
+        s = Submitor(
+            target=Cluster("dev", "slurm", _scheduler_impl=mock_scheduler),
+            store=memory_store,
+        )
         parent = s.submit_job(argv=["echo", "parent"])
         child = s.submit_job(
             argv=["echo", "child"],
@@ -221,7 +254,10 @@ class TestSubmit:
         assert submitted_spec.scheduling.dependency.startswith("afterok:")
 
     def test_submit_accepts_dependency_refs(self, memory_store, mock_scheduler):
-        s = Submitor(target=Cluster("dev", "slurm", _scheduler_impl=mock_scheduler), store=memory_store)
+        s = Submitor(
+            target=Cluster("dev", "slurm", _scheduler_impl=mock_scheduler),
+            store=memory_store,
+        )
         parent = s.submit_job(argv=["echo", "parent"])
         child = s.submit_job(
             argv=["echo", "child"],
@@ -238,7 +274,10 @@ class TestSubmit:
     def test_submit_after_failure_compiles_afternotok(
         self, memory_store, mock_scheduler
     ):
-        s = Submitor(target=Cluster("dev", "slurm", _scheduler_impl=mock_scheduler), store=memory_store)
+        s = Submitor(
+            target=Cluster("dev", "slurm", _scheduler_impl=mock_scheduler),
+            store=memory_store,
+        )
         parent = s.submit_job(argv=["echo", "parent"])
         child = s.submit_job(
             argv=["echo", "child"],
@@ -254,7 +293,10 @@ class TestSubmit:
     def test_submit_rejects_mixed_raw_and_logical_dependencies(
         self, memory_store, mock_scheduler
     ):
-        s = Submitor(target=Cluster("dev", "slurm", _scheduler_impl=mock_scheduler), store=memory_store)
+        s = Submitor(
+            target=Cluster("dev", "slurm", _scheduler_impl=mock_scheduler),
+            store=memory_store,
+        )
         parent = s.submit_job(argv=["echo", "parent"])
 
         # Mutual exclusion is enforced at JobScheduling construction time.

@@ -31,7 +31,7 @@ class _RemoteDir:
     Subclasses provide ``cluster`` and ``path`` (as a field or property).
     """
 
-    cluster: "Cluster"
+    cluster: Cluster
     path: str
 
     def upload(self, local: str, *, recursive: bool = False) -> None:
@@ -60,11 +60,11 @@ class _RemoteDir:
 class Workspace(_RemoteDir):
     """A base directory on the cluster's filesystem."""
 
-    cluster: "Cluster"
+    cluster: Cluster
     name: str
     path: str
 
-    def get_project(self, name: str) -> "Project":
+    def get_project(self, name: str) -> Project:
         return Project(workspace=self, name=name)
 
 
@@ -76,7 +76,7 @@ class Project(_RemoteDir):
     name: str
 
     @property
-    def cluster(self) -> "Cluster":  # type: ignore[override]
+    def cluster(self) -> Cluster:  # type: ignore[override]
         return self.workspace.cluster
 
     @property
@@ -85,9 +85,9 @@ class Project(_RemoteDir):
 
     def submit_job(
         self,
-        submitor: "Submitor",
+        submitor: Submitor,
         **submit_kwargs: Any,
-    ) -> "JobHandle":
+    ) -> JobHandle:
         """Submit a job whose working directory is this project's path.
 
         Forwards to :meth:`~molq.submitor.Submitor.submit_job`, overriding

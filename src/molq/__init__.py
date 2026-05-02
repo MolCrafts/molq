@@ -25,7 +25,6 @@ Usage::
 from molq.callbacks import EventBus, EventPayload, EventType
 from molq.cluster import Cluster
 from molq.config import MolqConfig, MolqProfile, load_config, load_profile
-from molq.workspace import Project, Workspace
 from molq.dashboard import DashboardState, JobRow, MolqMonitor, RunDashboard
 from molq.errors import (
     CommandError,
@@ -69,6 +68,7 @@ from molq.types import (
     Memory,
     Script,
 )
+from molq.workspace import Project, Workspace
 
 __all__ = [
     # Dashboard

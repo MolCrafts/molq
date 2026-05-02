@@ -91,8 +91,5 @@ class EventBus:
             try:
                 handler(data)
             except Exception:
-                logger.exception(
-                    "Handler %s failed for event %s",
-                    getattr(handler, "__name__", repr(handler)),
-                    event,
-                )
+                handler_name = getattr(handler, "__name__", repr(handler))
+                logger.exception(f"Handler {handler_name} failed for event {event}")

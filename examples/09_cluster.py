@@ -25,7 +25,6 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # 2) Bind a Submitor to it.  All lifecycle ops go through the submitor.
     with mq.Submitor(target=cluster) as submitor:
-
         # 3) Snapshot the cluster queue (empty for local).
         print(f"queue snapshot   : {cluster.get_queue()}")
 
@@ -36,11 +35,11 @@ with tempfile.TemporaryDirectory() as tmp:
         print(f"exit_code        : {record.exit_code}")
 
         # 5) Workspace + Project: remote-style directory handles.
-        ws   = cluster.get_workspace("scratch", path=tmp)
+        ws = cluster.get_workspace("scratch", path=tmp)
         proj = ws.get_project("alpha")
-        proj.ensure()                              # mkdir -p tmp/alpha
+        proj.ensure()  # mkdir -p tmp/alpha
 
         # Project.submit_job is sugar — overrides cwd to proj.path.
-        h2  = proj.submit_job(submitor, argv=["pwd"])
+        h2 = proj.submit_job(submitor, argv=["pwd"])
         rec = h2.wait()
         print(f"project cwd      : {rec.cwd}")

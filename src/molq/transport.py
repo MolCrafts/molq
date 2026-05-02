@@ -111,7 +111,9 @@ class Transport(Protocol):
     def write_text(self, path: str, data: str, *, mode: int = 0o600) -> None: ...
     def write_bytes(self, path: str, data: bytes, *, mode: int = 0o600) -> None: ...
     def exists(self, path: str) -> bool: ...
-    def mkdir(self, path: str, *, parents: bool = True, exist_ok: bool = True) -> None: ...
+    def mkdir(
+        self, path: str, *, parents: bool = True, exist_ok: bool = True
+    ) -> None: ...
     def chmod(self, path: str, mode: int) -> None: ...
     def remove(self, path: str, *, recursive: bool = False) -> None: ...
     def upload(
@@ -201,7 +203,9 @@ class LocalTransport:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         # Atomic: write tmp + rename, mirroring the workspace's atomic-write idiom.
-        fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp")
+        fd, tmp = tempfile.mkstemp(
+            dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp"
+        )
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
@@ -258,9 +262,7 @@ class LocalTransport:
         _local_copy(remote, local, recursive=recursive, exclude=exclude)
 
 
-def _local_copy(
-    src: str, dst: str, *, recursive: bool, exclude: Sequence[str]
-) -> None:
+def _local_copy(src: str, dst: str, *, recursive: bool, exclude: Sequence[str]) -> None:
     src_path = Path(src)
     dst_path = Path(dst)
     if not src_path.exists():
@@ -324,8 +326,10 @@ class SshTransport:
     def _ssh_argv(self) -> list[str]:
         argv: list[str] = [
             self._ssh_bin,
-            "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=accept-new",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
         ]
         if self.options.port is not None:
             argv += ["-p", str(self.options.port)]
@@ -348,8 +352,9 @@ class SshTransport:
     def _remote_target(self, path: str) -> str:
         return f"{self.options.host}:{path}"
 
-    def _shell(self, remote_cmd: str, *, input: str | None = None,
-               timeout: float | None = None) -> CommandResult:
+    def _shell(
+        self, remote_cmd: str, *, input: str | None = None, timeout: float | None = None
+    ) -> CommandResult:
         """Run *remote_cmd* (a single shell string) on the remote via ssh."""
         argv = self._ssh_argv() + ["--", remote_cmd]
         try:
@@ -409,7 +414,10 @@ class SshTransport:
         # Use base64 so we don't have to worry about embedded NULs / non-UTF8.
         result = self._shell(f"base64 -- {shlex.quote(path)}")
         if result.returncode != 0:
-            if "No such file" in result.stderr or "cannot open" in result.stderr.lower():
+            if (
+                "No such file" in result.stderr
+                or "cannot open" in result.stderr.lower()
+            ):
                 raise FileNotFoundError(path)
             raise TransportError(
                 f"remote read failed: {path}",
@@ -417,6 +425,7 @@ class SshTransport:
                 stderr=result.stderr,
             )
         import base64
+
         return base64.b64decode(result.stdout)
 
     def write_text(self, path: str, data: str, *, mode: int = 0o600) -> None:
@@ -426,13 +435,12 @@ class SshTransport:
         # Atomic-ish: write to .tmp and rename.  Use base64 over stdin to
         # carry arbitrary bytes through ssh cleanly.
         import base64
+
         encoded = base64.b64encode(data).decode("ascii")
         q_path = shlex.quote(path)
         q_tmp = shlex.quote(f"{path}.tmp")
         remote_cmd = (
-            f"base64 -d > {q_tmp} && "
-            f"chmod {mode:o} {q_tmp} && "
-            f"mv {q_tmp} {q_path}"
+            f"base64 -d > {q_tmp} && chmod {mode:o} {q_tmp} && mv {q_tmp} {q_path}"
         )
         result = self._shell(remote_cmd, input=encoded)
         if result.returncode != 0:
@@ -492,7 +500,9 @@ class SshTransport:
         recursive: bool = False,
         exclude: Sequence[str] = (),
     ) -> None:
-        self._rsync(local, self._remote_target(remote), recursive=recursive, exclude=exclude)
+        self._rsync(
+            local, self._remote_target(remote), recursive=recursive, exclude=exclude
+        )
 
     def download(
         self,
@@ -504,14 +514,20 @@ class SshTransport:
     ) -> None:
         # Ensure the local parent exists so rsync doesn't refuse.
         Path(local).parent.mkdir(parents=True, exist_ok=True)
-        self._rsync(self._remote_target(remote), local, recursive=recursive, exclude=exclude)
+        self._rsync(
+            self._remote_target(remote), local, recursive=recursive, exclude=exclude
+        )
 
     def _rsync(
         self, src: str, dst: str, *, recursive: bool, exclude: Sequence[str]
     ) -> None:
         argv: list[str] = [self._rsync_bin]
         argv += list(self.options.rsync_opts)
-        if recursive and "-a" not in self.options.rsync_opts and "-r" not in self.options.rsync_opts:
+        if (
+            recursive
+            and "-a" not in self.options.rsync_opts
+            and "-r" not in self.options.rsync_opts
+        ):
             argv.append("-r")
         for pattern in exclude:
             argv += ["--exclude", pattern]

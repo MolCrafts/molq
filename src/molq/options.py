@@ -75,8 +75,8 @@ class SshTransportOptions:
     transfers across flaky links and avoid extra renames on busy schedulers.
     """
 
-    host: str                                       # "user@host" or alias from ssh_config
+    host: str  # "user@host" or alias from ssh_config
     port: int | None = None
     identity_file: str | None = None
-    ssh_opts: tuple[str, ...] = ()                  # extra "-o" pairs / flags forwarded to ssh
+    ssh_opts: tuple[str, ...] = ()  # extra "-o" pairs / flags forwarded to ssh
     rsync_opts: tuple[str, ...] = ("-a", "--partial", "--inplace")
