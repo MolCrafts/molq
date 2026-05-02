@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS molq_meta (
 
 # v3: dropped UNIQUE(cluster_name, scheduler_job_id).  job_id (UUID) already
 # guarantees row identity, and OS-level PID reuse used to make the constraint
-# fire spuriously when the LocalScheduler reused a freed PID.
+# fire spuriously when the local scheduler reused a freed PID.
 _CREATE_JOBS = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id TEXT PRIMARY KEY,
@@ -118,6 +118,12 @@ class JobStore:
         db_path: Path to database file. Use ':memory:' for testing.
                  Defaults to ~/.molq/jobs.db.
     """
+
+    # Always set after __init__; close() flips it to None as an escape hatch
+    # so __del__ can be idempotent.  The type annotation captures the
+    # normal-operation invariant — calls after close() raise via SQLite's
+    # own "Cannot operate on a closed database" error.
+    _conn: sqlite3.Connection
 
     def __init__(self, db_path: Path | str | None = None) -> None:
         if db_path is None:
@@ -849,7 +855,7 @@ class JobStore:
         try:
             conn.close()
         finally:
-            self._conn = None  # type: ignore[assignment]
+            self._conn = None  # ty: ignore[invalid-assignment]
 
     def __del__(self) -> None:
         # Finalizer guard: if the user forgot to call close(), at least

@@ -10,7 +10,7 @@ Demonstrates:
 from molq.testing import make_submitor
 
 with make_submitor("demo", job_duration=0) as s:
-    handle = s.submit(argv=["echo", "hello"])
+    handle = s.submit_job(argv=["echo", "hello"])
 
     print(f"job_id          : {handle.job_id}")
     print(f"scheduler_job_id: {handle.scheduler_job_id}")

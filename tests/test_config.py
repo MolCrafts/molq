@@ -127,11 +127,21 @@ class TestDefaults:
     def test_scheduling_defaults(self, tmp_path):
         toml = (
             '[profiles.p]\nscheduler = "slurm"\ncluster_name = "c"\n'
+            '[profiles.p.defaults.scheduling]\npartition = "gpu"\n'
+        )
+        p = load_config(_write_toml(tmp_path, toml)).profiles["p"]
+        assert p.defaults.scheduling is not None
+        assert p.defaults.scheduling.partition == "gpu"
+
+    def test_scheduling_defaults_legacy_queue_key(self, tmp_path):
+        # Backward-compat: the legacy "queue" key still loads as partition
+        toml = (
+            '[profiles.p]\nscheduler = "slurm"\ncluster_name = "c"\n'
             '[profiles.p.defaults.scheduling]\nqueue = "gpu"\n'
         )
         p = load_config(_write_toml(tmp_path, toml)).profiles["p"]
         assert p.defaults.scheduling is not None
-        assert p.defaults.scheduling.queue == "gpu"
+        assert p.defaults.scheduling.partition == "gpu"
 
     def test_no_defaults_gives_none_fields(self, tmp_path):
         path = _write_toml(

@@ -47,7 +47,7 @@ def _open_submitor(
     config_path: str | None = None,
 ) -> Iterator["Submitor"]:
     """Open a Submitor for the CLI and guarantee its connection is closed."""
-    from molq import Submitor
+    from molq import Cluster, Submitor
     from molq.config import load_profile
 
     if profile:
@@ -58,21 +58,22 @@ def _open_submitor(
                 f"not {scheduler.value!r}"
             )
         cluster_name = cluster or loaded.cluster_name
-        submitor = Submitor.from_profile(profile, config_path=config_path)
-        if cluster is not None and cluster != loaded.cluster_name:
-            submitor = Submitor(
-                cluster_name,
-                scheduler.value,
-                defaults=loaded.defaults,
-                scheduler_options=loaded.scheduler_options,
-                jobs_dir=loaded.jobs_dir,
-                default_retry_policy=loaded.retry,
-                retention_policy=loaded.retention,
-                profile_name=loaded.name,
-            )
+        target = Cluster(
+            cluster_name,
+            scheduler.value,
+            scheduler_options=loaded.scheduler_options,
+        )
+        submitor = Submitor(
+            target,
+            defaults=loaded.defaults,
+            jobs_dir=loaded.jobs_dir,
+            default_retry_policy=loaded.retry,
+            retention_policy=loaded.retention,
+            profile_name=loaded.name,
+        )
     else:
         cluster_name = cluster or f"cli_{scheduler.value}"
-        submitor = Submitor(cluster_name, scheduler.value)
+        submitor = Submitor(target=Cluster(cluster_name, scheduler.value))
     try:
         yield submitor
     finally:
@@ -135,7 +136,7 @@ def _read_text(path: Path) -> str:
 def _follow_logs(
     submitor: "Submitor", job_id: str, stream_name: str, tail: int | None
 ) -> None:
-    record = submitor.get(job_id)
+    record = submitor.get_job(job_id)
     paths = _log_paths(record, stream_name)
     labeled = stream_name == "both"
     handles = {
@@ -158,11 +159,11 @@ def _follow_logs(
                     emitted = True
                     _emit_log_text(name, chunk, labeled=labeled)
 
-            record = submitor.get(job_id)
+            record = submitor.get_job(job_id)
             if record.state.is_terminal and not emitted:
                 break
 
-            submitor.refresh()
+            submitor.refresh_jobs()
             time.sleep(0.2)
     finally:
         for handle in handles.values():
@@ -198,7 +199,17 @@ def submit(
         str | None, typer.Option("--mem", help="Memory (e.g. 8G)")
     ] = None,
     time_limit: Annotated[str | None, typer.Option("--time", help="Time limit")] = None,
-    queue: Annotated[str | None, typer.Option(help="Queue/partition")] = None,
+    partition: Annotated[
+        str | None,
+        typer.Option(
+            "--partition",
+            help="Scheduler partition (SLURM partition / PBS / LSF queue)",
+        ),
+    ] = None,
+    queue: Annotated[
+        str | None,
+        typer.Option("--queue", help="Deprecated alias for --partition", hidden=True),
+    ] = None,
     gpu_count: Annotated[int | None, typer.Option("--gpus", help="GPUs")] = None,
     gpu_type: Annotated[str | None, typer.Option(help="GPU type")] = None,
     job_name: Annotated[str | None, typer.Option("--name", help="Job name")] = None,
@@ -267,7 +278,13 @@ def submit(
         gpu_type=gpu_type,
         time_limit=Duration.parse(time_limit) if time_limit else None,
     )
-    scheduling = JobScheduling(queue=queue, account=account)
+    if partition is not None and queue is not None:
+        console.print("[red]Error: pass --partition or --queue, not both.[/]")
+        raise typer.Exit(1)
+    if queue is not None and partition is None:
+        console.print("[yellow]Warning: --queue is deprecated; use --partition.[/]")
+        partition = queue
+    scheduling = JobScheduling(partition=partition, account=account)
     execution = JobExecution(cwd=workdir, job_name=job_name)
     retry_policy = None
     if retries is not None:
@@ -282,7 +299,7 @@ def submit(
 
     try:
         with _open_submitor(scheduler, cluster, profile, config) as submitor:
-            handle = submitor.submit(
+            handle = submitor.submit_job(
                 argv=cmd,
                 resources=resources,
                 scheduling=scheduling,
@@ -327,8 +344,8 @@ def list_jobs(
 ) -> None:
     """List submitted jobs."""
     with _open_submitor(scheduler, cluster, profile, config) as submitor:
-        submitor.refresh()
-        records = submitor.list(include_terminal=all)
+        submitor.refresh_jobs()
+        records = submitor.list_jobs(include_terminal=all)
 
     if not records:
         rprint("[dim]No jobs found.[/]")
@@ -372,9 +389,9 @@ def status(
     from molq import JobNotFoundError
 
     with _open_submitor(scheduler, cluster, profile, config) as submitor:
-        submitor.refresh()
+        submitor.refresh_jobs()
         try:
-            record = submitor.get(job_id)
+            record = submitor.get_job(job_id)
         except JobNotFoundError:
             rprint(f"[yellow]Job {job_id} not found[/]")
             raise typer.Exit(1)
@@ -425,9 +442,9 @@ def logs(
         raise typer.Exit(1)
 
     with _open_submitor(scheduler, cluster, profile, config) as submitor:
-        submitor.refresh()
+        submitor.refresh_jobs()
         try:
-            record = submitor.get(job_id)
+            record = submitor.get_job(job_id)
         except JobNotFoundError:
             rprint(f"[yellow]Job {job_id} not found[/]")
             raise typer.Exit(1)
@@ -485,14 +502,14 @@ def watch(
 
     with _open_submitor(scheduler, cluster, profile, config) as submitor:
         if all_jobs:
-            submitor.refresh()
-            active = [r for r in submitor.list(include_terminal=False)]
+            submitor.refresh_jobs()
+            active = [r for r in submitor.list_jobs(include_terminal=False)]
             if not active:
                 rprint("[dim]No active jobs.[/]")
                 return
             rprint(f"[dim]Watching {len(active)} active job(s)…[/]")
             try:
-                records = submitor.watch(None, timeout=timeout)
+                records = submitor.watch_jobs(None, timeout=timeout)
             except MolqTimeoutError:
                 console.print("[red]Timeout waiting for jobs[/]")
                 raise typer.Exit(1)
@@ -522,8 +539,11 @@ def watch(
             rprint(table)
             return
 
+        # Narrowed by the guards at the top of the function:
+        # if not all_jobs and job_id is None we already exited.
+        assert job_id is not None
         try:
-            record = submitor.get(job_id)
+            record = submitor.get_job(job_id)
         except JobNotFoundError:
             rprint(f"[yellow]Job {job_id} not found[/]")
             raise typer.Exit(1)
@@ -561,8 +581,8 @@ def history(
 ) -> None:
     """Show job history for a scheduler/cluster namespace."""
     with _open_submitor(scheduler, cluster, profile, config) as submitor:
-        submitor.refresh()
-        records = submitor.list(include_terminal=all)
+        submitor.refresh_jobs()
+        records = submitor.list_jobs(include_terminal=all)
 
     if not records:
         rprint("[dim]No jobs found.[/]")
@@ -616,9 +636,9 @@ def inspect(
     from molq import JobNotFoundError
 
     with _open_submitor(scheduler, cluster, profile, config) as submitor:
-        submitor.refresh()
+        submitor.refresh_jobs()
         try:
-            record = submitor.get(job_id)
+            record = submitor.get_job(job_id)
             transitions = submitor.get_transitions(job_id)
             family = submitor.get_retry_family(job_id)
             dependencies = submitor.get_dependencies(job_id)
@@ -626,7 +646,7 @@ def inspect(
             upstream_lines: list[str] = []
             downstream_lines: list[str] = []
             for dependency in dependencies:
-                dep_record = submitor.get(dependency.dependency_job_id)
+                dep_record = submitor.get_job(dependency.dependency_job_id)
                 relation_state = _dependency_relation_state(
                     dependency.dependency_type, dep_record
                 )
@@ -636,7 +656,7 @@ def inspect(
                     f"{dep_record.state.value}  scheduler={dependency.scheduler_dependency}"
                 )
             for dependent in dependents:
-                dependent_record = submitor.get(dependent.job_id)
+                dependent_record = submitor.get_job(dependent.job_id)
                 relation_state = _dependency_relation_state(
                     dependent.dependency_type, record
                 )
@@ -765,7 +785,7 @@ def cancel(
 
     with _open_submitor(scheduler, cluster, profile, config) as submitor:
         try:
-            submitor.cancel(job_id)
+            submitor.cancel_job(job_id)
             rprint(f"[green]Job {job_id} cancelled[/]")
         except JobNotFoundError:
             rprint(f"[yellow]Job {job_id} not found[/]")
@@ -787,7 +807,7 @@ def cleanup(
 ) -> None:
     """Clean up old job artifacts and records."""
     with _open_submitor(scheduler, cluster, profile, config) as submitor:
-        result = submitor.cleanup(dry_run=dry_run)
+        result = submitor.cleanup_jobs(dry_run=dry_run)
     rprint(f"Job dirs: {len(result['job_dirs'])}")
     rprint(f"Records:  {len(result['records'])}")
     for path in result["job_dirs"]:
@@ -817,7 +837,9 @@ def daemon(
     """Run the background reconciliation loop."""
     with _open_submitor(scheduler, cluster, profile, config) as submitor:
         try:
-            submitor.daemon(once=once, interval=interval, run_cleanup=not skip_cleanup)
+            submitor.run_daemon(
+                once=once, interval=interval, run_cleanup=not skip_cleanup
+            )
         except KeyboardInterrupt:
             rprint("[dim]Daemon interrupted[/]")
 

@@ -170,3 +170,6 @@ poetry.toml
 
 # LSP config files
 pyrightconfig.json
+
+# molq runtime artifacts (jobs.db, per-job logs)
+.molq/

@@ -27,7 +27,7 @@ class TestSubmitCommand:
         handle.scheduler_job_id = "12345"
 
         mock_submitor = MagicMock()
-        mock_submitor.submit.return_value = handle
+        mock_submitor.submit_job.return_value = handle
         mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["submit", "local", "echo", "hello"])
@@ -43,7 +43,7 @@ class TestListCommand:
     @patch("molq.cli.main._open_submitor")
     def test_list_empty(self, mock_create):
         mock_submitor = MagicMock()
-        mock_submitor.list.return_value = []
+        mock_submitor.list_jobs.return_value = []
         mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["list", "local"])
@@ -61,7 +61,7 @@ class TestListCommand:
             command_display="echo hello",
         )
         mock_submitor = MagicMock()
-        mock_submitor.list.return_value = [record]
+        mock_submitor.list_jobs.return_value = [record]
         mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["list", "local"])
@@ -81,7 +81,7 @@ class TestStatusCommand:
             command_display="echo hello",
         )
         mock_submitor = MagicMock()
-        mock_submitor.get.return_value = record
+        mock_submitor.get_job.return_value = record
         mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["status", "abc-123", "local"])
@@ -93,7 +93,7 @@ class TestStatusCommand:
         from molq.errors import JobNotFoundError
 
         mock_submitor = MagicMock()
-        mock_submitor.get.side_effect = JobNotFoundError("abc")
+        mock_submitor.get_job.side_effect = JobNotFoundError("abc")
         mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["status", "abc", "local"])
@@ -116,7 +116,7 @@ class TestLogsCommand:
             metadata={"molq.stdout_path": str(log_path)},
         )
         mock_submitor = MagicMock()
-        mock_submitor.get.return_value = record
+        mock_submitor.get_job.return_value = record
         mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["logs", "abc-123", "local", "--tail", "1"])
@@ -142,7 +142,7 @@ class TestLogsCommand:
             },
         )
         mock_submitor = MagicMock()
-        mock_submitor.get.return_value = record
+        mock_submitor.get_job.return_value = record
         mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["logs", "abc-123", "local", "--stream", "both"])
@@ -164,7 +164,7 @@ class TestLogsCommand:
             metadata={"molq.stdout_path": str(stdout_path)},
         )
         mock_submitor = MagicMock()
-        mock_submitor.get.return_value = record
+        mock_submitor.get_job.return_value = record
         mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["logs", "abc-123", "local", "--follow"])
@@ -185,7 +185,7 @@ class TestHistoryAndInspect:
             command_display="echo hello",
         )
         mock_submitor = MagicMock()
-        mock_submitor.list.return_value = [record]
+        mock_submitor.list_jobs.return_value = [record]
         mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["history", "local", "--all"])
@@ -227,7 +227,7 @@ class TestHistoryAndInspect:
             ),
         ]
         mock_submitor = MagicMock()
-        mock_submitor.get.return_value = record
+        mock_submitor.get_job.return_value = record
         mock_submitor.get_transitions.return_value = transitions
         mock_submitor.get_retry_family.return_value = [record]
         mock_submitor.get_dependencies.return_value = [
@@ -267,7 +267,7 @@ class TestCancelCommand:
         from molq.errors import JobNotFoundError
 
         mock_submitor = MagicMock()
-        mock_submitor.cancel.side_effect = JobNotFoundError("abc")
+        mock_submitor.cancel_job.side_effect = JobNotFoundError("abc")
         mock_create.return_value.__enter__.return_value = mock_submitor
 
         result = runner.invoke(app, ["cancel", "abc", "local"])
@@ -278,7 +278,7 @@ class TestMaintenanceCommands:
     @patch("molq.cli.main._open_submitor")
     def test_cleanup(self, mock_create):
         mock_submitor = MagicMock()
-        mock_submitor.cleanup.return_value = {
+        mock_submitor.cleanup_jobs.return_value = {
             "job_dirs": ["/tmp/jobs/a"],
             "records": ["job-1"],
         }
@@ -296,4 +296,4 @@ class TestMaintenanceCommands:
 
         result = runner.invoke(app, ["daemon", "local", "--once"])
         assert result.exit_code == 0
-        mock_submitor.daemon.assert_called_once()
+        mock_submitor.run_daemon.assert_called_once()

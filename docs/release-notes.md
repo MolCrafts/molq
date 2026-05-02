@@ -20,6 +20,6 @@ Initial beta release of `molq`.
 
 - `Submitor` and `JobHandle` as the public job submission surface
 - Typed submission models: `Memory`, `Duration`, `Script`, `JobResources`, `JobScheduling`, `JobExecution`
-- Backends for local execution, SLURM, PBS, and LSF
+- Schedulers for local execution, SLURM, PBS, and LSF
 - SQLite-backed persistence with reconciliation and monitoring
 - CLI commands for submit, inspect, watch, cancel, and log access

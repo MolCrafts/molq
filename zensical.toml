@@ -12,6 +12,7 @@ edit_uri = "edit/master/docs/"
 nav = [
   {"Overview" = "index.md"},
   {"Guide" = [
+    "concepts.md",
     "getting-started.md",
     "schedulers.md",
     "monitoring.md",

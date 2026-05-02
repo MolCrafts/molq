@@ -59,3 +59,24 @@ OPTIONS_TYPE_MAP: dict[str, type[SchedulerOptions]] = {
     "pbs": PBSSchedulerOptions,
     "lsf": LSFSchedulerOptions,
 }
+
+
+# ---------------------------------------------------------------------------
+# Transport options (orthogonal to scheduler options — see molq.transport).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SshTransportOptions:
+    """Options for :class:`molq.transport.SshTransport`.
+
+    ``host`` is the only required field — everything else falls back to the
+    user's ``~/.ssh/config``.  ``rsync_opts`` defaults preserve partial
+    transfers across flaky links and avoid extra renames on busy schedulers.
+    """
+
+    host: str  # "user@host" or alias from ssh_config
+    port: int | None = None
+    identity_file: str | None = None
+    ssh_opts: tuple[str, ...] = ()  # extra "-o" pairs / flags forwarded to ssh
+    rsync_opts: tuple[str, ...] = ("-a", "--partial", "--inplace")

@@ -25,7 +25,7 @@ print(f"Parsed  : {dur2.to_slurm()}")
 
 # ── Submit with full resource spec ────────────────────────────────────────────
 with make_submitor("hpc", job_duration=0) as s:
-    handle = s.submit(
+    handle = s.submit_job(
         argv=["python", "train.py"],
         resources=JobResources(
             cpu_count=16,

@@ -9,14 +9,14 @@ Usage::
 
     # Standalone example or test:
     with make_submitor("demo") as s:
-        handle = s.submit(argv=["echo", "hello"])
+        handle = s.submit_job(argv=["echo", "hello"])
         record = handle.wait()
         print(record.state)   # JobState.SUCCEEDED
 
     # Inject custom outcomes / timing:
     with make_submitor("demo", outcomes=["succeeded", "failed"], job_duration=0) as s:
-        h1 = s.submit(argv=["true"])   # will succeed
-        h2 = s.submit(argv=["false"])  # will fail
+        h1 = s.submit_job(argv=["true"])   # will succeed
+        h2 = s.submit_job(argv=["false"])  # will fail
         ...
 
     # Use FakeScheduler directly for fine-grained control:
@@ -127,6 +127,10 @@ class FakeScheduler:
             if scheduler_job_id in self._jobs:
                 self._jobs[scheduler_job_id]["cancelled"] = True
 
+    def list_queue(self, *, user: str | None = None):
+        """Return an empty list — FakeScheduler simulates a private execution surface."""
+        return []
+
     def capabilities(self) -> SchedulerCapabilities:
         return SchedulerCapabilities(
             supports_cwd=True,
@@ -139,7 +143,7 @@ class FakeScheduler:
             supports_gpu_count=True,
             supports_gpu_type=True,
             supports_time_limit=True,
-            supports_queue=True,
+            supports_partition=True,
             supports_account=True,
             supports_priority=True,
             supports_dependency=True,
@@ -187,10 +191,13 @@ def make_submitor(
     Example::
 
         with make_submitor("demo", outcomes="failed", job_duration=0) as s:
-            handle = s.submit(argv=["python", "train.py"])
+            handle = s.submit_job(argv=["python", "train.py"])
             record = handle.wait()
             assert record.state == JobState.FAILED
     """
+    from molq.cluster import Cluster
+
     _store = store if store is not None else JobStore(":memory:")
     fake = FakeScheduler(outcomes=outcomes, job_duration=job_duration)
-    return Submitor(cluster_name, store=_store, _scheduler=fake)
+    cluster = Cluster(cluster_name, "local", _scheduler_impl=fake)
+    return Submitor(target=cluster, store=_store)

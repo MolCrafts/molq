@@ -264,7 +264,7 @@ class JobResources:
 class JobScheduling:
     """Scheduler-level parameters."""
 
-    queue: str | None = None
+    partition: str | None = None
     account: str | None = None
     priority: str | None = None
     dependency: str | None = None

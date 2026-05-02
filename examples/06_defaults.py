@@ -16,7 +16,7 @@ cluster_defaults = SubmitorDefaults(
         time_limit=Duration.hours(2),
     ),
     scheduling=JobScheduling(
-        queue="normal",
+        partition="normal",
         account="lab-budget",
     ),
     execution=JobExecution(
@@ -28,12 +28,12 @@ with make_submitor("hpc", job_duration=0) as s:
     s._defaults = cluster_defaults  # inject defaults for this demo
 
     # Uses all defaults
-    h1 = s.submit(argv=["python", "eval.py"])
+    h1 = s.submit_job(argv=["python", "eval.py"])
     r1 = h1.wait()
     print(f"default job  → {r1.state}")
 
     # Override: request a GPU queue and more memory; other defaults still apply
-    h2 = s.submit(
+    h2 = s.submit_job(
         argv=["python", "train.py"],
         resources=JobResources(
             cpu_count=8,
@@ -41,7 +41,7 @@ with make_submitor("hpc", job_duration=0) as s:
             gpu_count=1,
             time_limit=Duration.hours(12),
         ),
-        scheduling=JobScheduling(queue="gpu"),
+        scheduling=JobScheduling(partition="gpu"),
     )
     r2 = h2.wait()
     print(f"override job → {r2.state}")

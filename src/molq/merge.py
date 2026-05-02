@@ -11,7 +11,7 @@ from molq.models import SubmitorDefaults
 from molq.types import JobExecution, JobResources, JobScheduling
 
 
-def _merge_one(default: object | None, override: object | None, cls: type) -> object:
+def _merge_one[T](default: T | None, override: T | None, cls: type[T]) -> T:
     """Merge a single defaults/override pair using field-level shallow override.
 
     For each field in the override instance, if the field value is the type's
@@ -20,7 +20,8 @@ def _merge_one(default: object | None, override: object | None, cls: type) -> ob
     if default is None and override is None:
         return cls()
     if default is None:
-        return override  # type: ignore[return-value]
+        assert override is not None
+        return override
     if override is None:
         return default
 
@@ -55,7 +56,7 @@ def merge_defaults(
     d_execution = defaults.execution if defaults else None
 
     return (
-        _merge_one(d_resources, resources, JobResources),  # type: ignore[return-value]
-        _merge_one(d_scheduling, scheduling, JobScheduling),  # type: ignore[return-value]
-        _merge_one(d_execution, execution, JobExecution),  # type: ignore[return-value]
+        _merge_one(d_resources, resources, JobResources),
+        _merge_one(d_scheduling, scheduling, JobScheduling),
+        _merge_one(d_execution, execution, JobExecution),
     )
