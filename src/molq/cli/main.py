@@ -47,10 +47,8 @@ def _open_submitor(
     config_path: str | None = None,
 ) -> Iterator["Submitor"]:
     """Open a Submitor for the CLI and guarantee its connection is closed."""
-    from molq import Submitor
+    from molq import Cluster, Submitor
     from molq.config import load_profile
-
-    from molq import Cluster
 
     if profile:
         loaded = load_profile(profile, config_path)
@@ -203,7 +201,10 @@ def submit(
     time_limit: Annotated[str | None, typer.Option("--time", help="Time limit")] = None,
     partition: Annotated[
         str | None,
-        typer.Option("--partition", help="Scheduler partition (SLURM partition / PBS / LSF queue)"),
+        typer.Option(
+            "--partition",
+            help="Scheduler partition (SLURM partition / PBS / LSF queue)",
+        ),
     ] = None,
     queue: Annotated[
         str | None,
@@ -281,9 +282,7 @@ def submit(
         console.print("[red]Error: pass --partition or --queue, not both.[/]")
         raise typer.Exit(1)
     if queue is not None and partition is None:
-        console.print(
-            "[yellow]Warning: --queue is deprecated; use --partition.[/]"
-        )
+        console.print("[yellow]Warning: --queue is deprecated; use --partition.[/]")
         partition = queue
     scheduling = JobScheduling(partition=partition, account=account)
     execution = JobExecution(cwd=workdir, job_name=job_name)
@@ -540,6 +539,9 @@ def watch(
             rprint(table)
             return
 
+        # Narrowed by the guards at the top of the function:
+        # if not all_jobs and job_id is None we already exited.
+        assert job_id is not None
         try:
             record = submitor.get_job(job_id)
         except JobNotFoundError:
@@ -835,7 +837,9 @@ def daemon(
     """Run the background reconciliation loop."""
     with _open_submitor(scheduler, cluster, profile, config) as submitor:
         try:
-            submitor.run_daemon(once=once, interval=interval, run_cleanup=not skip_cleanup)
+            submitor.run_daemon(
+                once=once, interval=interval, run_cleanup=not skip_cleanup
+            )
         except KeyboardInterrupt:
             rprint("[dim]Daemon interrupted[/]")
 

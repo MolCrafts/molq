@@ -108,9 +108,14 @@ class Submitor:
             submission working directory at ``.molq/jobs/<job-id>/``.
     """
 
+    # Always set after __init__; close() flips to None as an escape hatch
+    # so __del__ can run cleanly.  Annotation captures the normal-operation
+    # invariant — calls after close() raise via _store.get_record(...) etc.
+    _store: JobStore
+
     def __init__(
         self,
-        target: "Cluster",
+        target: Cluster,
         *,
         defaults: SubmitorDefaults | None = None,
         store: JobStore | None = None,
@@ -152,7 +157,7 @@ class Submitor:
         cls,
         profile_name: str,
         *,
-        target: "Cluster | None" = None,
+        target: Cluster | None = None,
         config_path: str | Path | None = None,
         store: JobStore | None = None,
     ) -> Submitor:
@@ -176,7 +181,7 @@ class Submitor:
         )
 
     @property
-    def target(self) -> "Cluster":
+    def target(self) -> Cluster:
         return self._target
 
     @property
@@ -416,7 +421,7 @@ class Submitor:
         store = getattr(self, "_store", None)
         if store is not None:
             store.close()
-            self._store = None  # type: ignore[assignment]
+            self._store = None  # ty: ignore[invalid-assignment]
 
     def __enter__(self) -> Submitor:
         return self

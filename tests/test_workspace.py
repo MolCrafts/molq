@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from molq.cluster import Cluster
-from molq.submitor import Submitor
 from molq.testing import make_submitor
 from molq.workspace import Project, Workspace
 
@@ -31,7 +30,9 @@ class TestWorkspace:
         ws = Workspace(cluster=cluster, name="ws", path=str(tmp_path))
         assert ws.exists() is True
         ws_missing = Workspace(
-            cluster=cluster, name="missing", path=str(tmp_path / "absent"),
+            cluster=cluster,
+            name="missing",
+            path=str(tmp_path / "absent"),
         )
         assert ws_missing.exists() is False
 

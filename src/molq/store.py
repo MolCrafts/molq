@@ -119,6 +119,12 @@ class JobStore:
                  Defaults to ~/.molq/jobs.db.
     """
 
+    # Always set after __init__; close() flips it to None as an escape hatch
+    # so __del__ can be idempotent.  The type annotation captures the
+    # normal-operation invariant — calls after close() raise via SQLite's
+    # own "Cannot operate on a closed database" error.
+    _conn: sqlite3.Connection
+
     def __init__(self, db_path: Path | str | None = None) -> None:
         if db_path is None:
             molq_dir = Path.home() / ".molq"
@@ -849,7 +855,7 @@ class JobStore:
         try:
             conn.close()
         finally:
-            self._conn = None  # type: ignore[assignment]
+            self._conn = None  # ty: ignore[invalid-assignment]
 
     def __del__(self) -> None:
         # Finalizer guard: if the user forgot to call close(), at least

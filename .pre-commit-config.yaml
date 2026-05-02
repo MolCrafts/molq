@@ -1,3 +1,9 @@
+# Hooks split by stage:
+#   - commit:   fast static checks (ruff lint + format, ty type check, basic
+#               file hygiene)
+#   - pre-push: tests (slow; matches what CI's test job runs)
+default_install_hook_types: [pre-commit, pre-push]
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -23,3 +29,11 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+
+      - id: pytest
+        name: pytest
+        entry: pytest -q
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]

@@ -260,20 +260,25 @@ class JobReconciler:
         changed under us (e.g. a concurrent cancel()) and the transition was
         skipped to preserve the authoritative value.
         """
-        kwargs: dict[str, object] = {}
-        if new_state == JobState.RUNNING and old_state != JobState.RUNNING:
-            kwargs["started_at"] = timestamp
-        if new_state.is_terminal:
-            kwargs["finished_at"] = timestamp
-            if terminal is not None:
-                kwargs["exit_code"] = terminal.exit_code
-                kwargs["failure_reason"] = terminal.failure_reason
-
+        is_terminal = new_state.is_terminal
         applied = self._store.compare_and_update_state(
             job_id,
             expected_state=old_state,
             new_state=new_state,
-            **kwargs,
+            started_at=(
+                timestamp
+                if new_state == JobState.RUNNING and old_state != JobState.RUNNING
+                else None
+            ),
+            finished_at=timestamp if is_terminal else None,
+            exit_code=terminal.exit_code
+            if is_terminal and terminal is not None
+            else None,
+            failure_reason=(
+                terminal.failure_reason
+                if is_terminal and terminal is not None
+                else None
+            ),
         )
         if not applied:
             return False

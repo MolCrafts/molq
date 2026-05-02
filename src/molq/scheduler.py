@@ -199,7 +199,7 @@ class LocalScheduler:
             try:
                 proc.wait()
             except Exception:
-                logger.debug("reaper failed for pid=%s", proc.pid, exc_info=True)
+                logger.debug(f"reaper failed for pid={proc.pid}", exc_info=True)
             finally:
                 with self._procs_lock:
                     self._procs.pop(proc.pid, None)
@@ -342,29 +342,35 @@ class ShellScheduler:
         cwd = spec.execution.cwd or spec.cwd
         env_lines = ""
         if spec.execution.env:
-            env_lines = "\n".join(
-                f"export {k}={_shell_quote(v)}" for k, v in sorted(spec.execution.env.items())
-            ) + "\n"
+            env_lines = (
+                "\n".join(
+                    f"export {k}={_shell_quote(v)}"
+                    for k, v in sorted(spec.execution.env.items())
+                )
+                + "\n"
+            )
         cd_line = f"cd {_shell_quote(str(cwd))}\n" if cwd else ""
 
         out_redir = (
-            f' > {_shell_quote(spec.execution.output_file)}'
-            if spec.execution.output_file else " > /dev/null"
+            f" > {_shell_quote(spec.execution.output_file)}"
+            if spec.execution.output_file
+            else " > /dev/null"
         )
         err_redir = (
-            f' 2> {_shell_quote(spec.execution.error_file)}'
-            if spec.execution.error_file else " 2> /dev/null"
+            f" 2> {_shell_quote(spec.execution.error_file)}"
+            if spec.execution.error_file
+            else " 2> /dev/null"
         )
 
         wrapper = (
             f"#!/bin/bash\n"
             f"{env_lines}"
             f"{cd_line}"
-            f'( bash {_shell_quote(str(script_path))}{out_redir}{err_redir} ) &\n'
-            f'pid=$!\n'
-            f'echo $pid > {_shell_quote(str(pid_path))}\n'
-            f'wait $pid\n'
-            f'echo $? > {_shell_quote(str(exit_code_path))}\n'
+            f"( bash {_shell_quote(str(script_path))}{out_redir}{err_redir} ) &\n"
+            f"pid=$!\n"
+            f"echo $pid > {_shell_quote(str(pid_path))}\n"
+            f"wait $pid\n"
+            f"echo $? > {_shell_quote(str(exit_code_path))}\n"
         )
         # Wrapper script lands on the transport's filesystem so that ssh-routed
         # ShellScheduler instances find it on the remote at the same path the
@@ -376,15 +382,16 @@ class ShellScheduler:
         # wrapper itself into nohup + background so closing the ssh session
         # doesn't terminate it.
         launch = (
-            f'nohup bash {_shell_quote(str(wrapper_path))} '
-            f'> /dev/null 2>&1 < /dev/null &\n'
-            f'echo $!\n'
+            f"nohup bash {_shell_quote(str(wrapper_path))} "
+            f"> /dev/null 2>&1 < /dev/null &\n"
+            f"echo $!\n"
         )
         try:
             result = self._transport.run(["bash", "-c", launch], timeout=30)
         except TransportError as e:
             raise SchedulerError(
-                "shell submission failed", command=["bash", "-c", launch],
+                "shell submission failed",
+                command=["bash", "-c", launch],
             ) from e
         if result.returncode != 0:
             raise SchedulerError(
@@ -398,6 +405,7 @@ class ShellScheduler:
         # one users would expect (e.g. matches `ps`).  Wait briefly for the
         # wrapper to write .pid (typical: <50ms).
         import time as _time
+
         deadline = _time.monotonic() + 5.0
         while _time.monotonic() < deadline:
             if self._transport.exists(str(pid_path)):
@@ -473,7 +481,9 @@ class ShellScheduler:
     def _materialize_script(self, spec: JobSpec, job_dir: Path) -> Path:
         script_path = job_dir / "run.sh"
         self._transport.write_text(
-            str(script_path), _render_job_script(spec, job_dir), mode=0o700,
+            str(script_path),
+            _render_job_script(spec, job_dir),
+            mode=0o700,
         )
         return script_path
 
@@ -555,7 +565,8 @@ class SlurmScheduler:
             result = self._transport.run(cmd, timeout=60)
         except TransportError as e:
             raise SchedulerError(
-                "SLURM submission timed out", command=cmd,
+                "SLURM submission timed out",
+                command=cmd,
             ) from e
         if result.returncode != 0:
             raise SchedulerError(
@@ -582,7 +593,7 @@ class SlurmScheduler:
         try:
             result = self._transport.run(cmd, timeout=30)
         except TransportError as e:
-            logger.warning("squeue invocation failed: %s", e)
+            logger.warning(f"squeue invocation failed: {e}")
             return {}
         if not result.stdout.strip():
             return {}
@@ -600,7 +611,8 @@ class SlurmScheduler:
     def cancel(self, scheduler_job_id: str) -> None:
         try:
             self._transport.run(
-                [self._opts.scancel_path, scheduler_job_id], timeout=30,
+                [self._opts.scancel_path, scheduler_job_id],
+                timeout=30,
             )
         except TransportError:
             pass
@@ -650,7 +662,7 @@ class SlurmScheduler:
         try:
             result = self._transport.run(cmd, timeout=30)
         except TransportError as exc:
-            logger.warning("squeue invocation failed: %s", exc)
+            logger.warning(f"squeue invocation failed: {exc}")
             return []
         if result.returncode != 0 or not result.stdout.strip():
             return []
@@ -688,7 +700,9 @@ class SlurmScheduler:
 
         lines.extend(_render_job_lines(spec, job_dir))
 
-        self._transport.write_text(str(script_path), "\n".join(lines) + "\n", mode=0o700)
+        self._transport.write_text(
+            str(script_path), "\n".join(lines) + "\n", mode=0o700
+        )
         return script_path
 
     def _map_resources(self, spec: JobSpec) -> dict[str, str]:
@@ -810,7 +824,7 @@ class PBSScheduler:
         try:
             result = self._transport.run(cmd, timeout=30)
         except TransportError as e:
-            logger.warning("qstat invocation failed: %s", e)
+            logger.warning(f"qstat invocation failed: {e}")
             return {}
         if not result.stdout.strip():
             return {}
@@ -835,7 +849,8 @@ class PBSScheduler:
     def cancel(self, scheduler_job_id: str) -> None:
         try:
             self._transport.run(
-                [self._opts.qdel_path, scheduler_job_id], timeout=30,
+                [self._opts.qdel_path, scheduler_job_id],
+                timeout=30,
             )
         except TransportError:
             pass
@@ -843,7 +858,8 @@ class PBSScheduler:
     def resolve_terminal(self, scheduler_job_id: str) -> TerminalStatus | None:
         try:
             result = self._transport.run(
-                [self._opts.tracejob_path, scheduler_job_id], timeout=15,
+                [self._opts.tracejob_path, scheduler_job_id],
+                timeout=15,
             )
         except TransportError:
             return None
@@ -879,7 +895,7 @@ class PBSScheduler:
         try:
             result = self._transport.run(cmd, timeout=30)
         except TransportError as exc:
-            logger.warning("qstat invocation failed: %s", exc)
+            logger.warning(f"qstat invocation failed: {exc}")
             return []
         if result.returncode != 0 or not result.stdout.strip():
             return []
@@ -923,7 +939,9 @@ class PBSScheduler:
 
         lines.extend(_render_job_lines(spec, job_dir))
 
-        self._transport.write_text(str(script_path), "\n".join(lines) + "\n", mode=0o700)
+        self._transport.write_text(
+            str(script_path), "\n".join(lines) + "\n", mode=0o700
+        )
         return script_path
 
     def _map_resources(self, spec: JobSpec) -> dict[str, str]:
@@ -1049,7 +1067,7 @@ class LSFScheduler:
         try:
             result = self._transport.run(cmd, timeout=30)
         except TransportError as e:
-            logger.warning("bjobs invocation failed: %s", e)
+            logger.warning(f"bjobs invocation failed: {e}")
             return {}
         if not result.stdout.strip():
             return {}
@@ -1071,7 +1089,8 @@ class LSFScheduler:
     def cancel(self, scheduler_job_id: str) -> None:
         try:
             self._transport.run(
-                [self._opts.bkill_path, scheduler_job_id], timeout=30,
+                [self._opts.bkill_path, scheduler_job_id],
+                timeout=30,
             )
         except TransportError:
             pass
@@ -1079,7 +1098,8 @@ class LSFScheduler:
     def resolve_terminal(self, scheduler_job_id: str) -> TerminalStatus | None:
         try:
             result = self._transport.run(
-                [self._opts.bhist_path, "-l", scheduler_job_id], timeout=15,
+                [self._opts.bhist_path, "-l", scheduler_job_id],
+                timeout=15,
             )
         except TransportError:
             return None
@@ -1095,9 +1115,7 @@ class LSFScheduler:
             return TerminalStatus(
                 state=JobState.FAILED,
                 exit_code=code,
-                failure_reason=_default_failure_reason(
-                    JobState.FAILED, code, "exit"
-                ),
+                failure_reason=_default_failure_reason(JobState.FAILED, code, "exit"),
                 raw_state="exit",
             )
         return None
@@ -1107,14 +1125,15 @@ class LSFScheduler:
         cmd: list[str] = [
             self._opts.bjobs_path,
             "-noheader",
-            "-o", "jobid stat job_name user queue submit_time start_time",
+            "-o",
+            "jobid stat job_name user queue submit_time start_time",
         ]
         if target_user:
             cmd += ["-u", target_user]
         try:
             result = self._transport.run(cmd, timeout=30)
         except TransportError as exc:
-            logger.warning("bjobs invocation failed: %s", exc)
+            logger.warning(f"bjobs invocation failed: {exc}")
             return []
         if result.returncode != 0 or not result.stdout.strip():
             return []
@@ -1154,7 +1173,9 @@ class LSFScheduler:
 
         lines.extend(_render_job_lines(spec, job_dir))
 
-        self._transport.write_text(str(script_path), "\n".join(lines) + "\n", mode=0o700)
+        self._transport.write_text(
+            str(script_path), "\n".join(lines) + "\n", mode=0o700
+        )
         return script_path
 
     def _map_resources(self, spec: JobSpec) -> dict[str, str]:
@@ -1201,7 +1222,7 @@ def create_scheduler(
     options: SchedulerOptions | None = None,
     *,
     transport: Transport | None = None,
-) -> "LocalScheduler | ShellScheduler | SlurmScheduler | PBSScheduler | LSFScheduler":
+) -> LocalScheduler | ShellScheduler | SlurmScheduler | PBSScheduler | LSFScheduler:
     """Create a Scheduler implementation by name.
 
     The optional *transport* parameter routes shell/file ops through the given
@@ -1299,7 +1320,7 @@ def _payload_lines(spec: JobSpec, job_dir: Path) -> list[str]:
         return [cmd.command]
     if cmd.script is not None:
         if cmd.script.variant == "inline":
-            return (cmd.script.text or "").splitlines()
+            return list((cmd.script.text or "").splitlines())
         if cmd.script.variant == "path":
             return [f'bash "{job_dir / "user_script.sh"}"']
     return []

@@ -16,15 +16,15 @@ from molq.testing import make_submitor
 print("=== 1. Failed job ===")
 with make_submitor("demo", outcomes="failed", job_duration=0) as s:
     record = s.submit_job(argv=["python", "broken.py"]).wait()
-    print(f"state   : {record.state}")              # JobState.FAILED
+    print(f"state   : {record.state}")  # JobState.FAILED
     assert record.state == JobState.FAILED
 
 # ── 2. Timeout ────────────────────────────────────────────────────────────────
 print("\n=== 2. Timeout ===")
-with make_submitor("demo", job_duration=60) as s:   # job takes 60 s
+with make_submitor("demo", job_duration=60) as s:  # job takes 60 s
     handle = s.submit_job(argv=["python", "slow.py"])
     try:
-        handle.wait(timeout=0.05)                   # give up after 50 ms
+        handle.wait(timeout=0.05)  # give up after 50 ms
     except MolqTimeoutError as exc:
         print(f"timed out as expected: {exc}")
 
@@ -42,13 +42,13 @@ with make_submitor("demo", job_duration=60) as s:
     handle = s.submit_job(argv=["python", "long_job.py"])
     s.cancel_job(handle.job_id)
     record = s.get(handle.job_id)
-    print(f"state after cancel: {record.state}")    # CANCELLED
+    print(f"state after cancel: {record.state}")  # CANCELLED
 
 # ── 5. CommandError ───────────────────────────────────────────────────────────
 print("\n=== 5. CommandError ===")
 with make_submitor("demo") as s:
     try:
-        s.submit_job(argv=["echo"], command="echo")     # two commands at once
+        s.submit_job(argv=["echo"], command="echo")  # two commands at once
     except CommandError as exc:
         print(f"CommandError: {exc}")
 
