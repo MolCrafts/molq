@@ -21,8 +21,8 @@ where a bug lives.
                ┌───────────────▼─┐       ┌─────▼─────────────┐
                │    Scheduler    │       │     Transport     │
                │   (protocol)    │       │    (protocol)     │
-               │ Local/Slurm/    │       │  Local / SSH      │
-               │ PBS/LSF/Shell   │       │                   │
+               │ Shell / Slurm / │       │  Local / SSH      │
+               │   PBS  / LSF    │       │                   │
                └─────────────────┘       └───────────────────┘
                   HOW to talk                WHERE commands and
                   to the scheduler           file ops execute
@@ -30,8 +30,9 @@ where a bug lives.
 ```
 
 The point of the split: **Scheduler × Transport are independent axes.** You
-can drive a remote SLURM cluster via SSH, or a local Shell cluster via
-subprocess, or any other combination — without touching `Submitor` or
+can drive a remote SLURM cluster via SSH, or a local "no batch system"
+cluster via subprocess, or run jobs on a remote workstation by pairing
+`scheduler="local"` with `host="..."` — without touching `Submitor` or
 `Cluster` code.
 
 ## Cluster — *where* jobs run
@@ -39,10 +40,15 @@ subprocess, or any other combination — without touching `Submitor` or
 A `Cluster` is a destination spec. It owns:
 
 - a **name** (used to scope persisted records)
-- a **scheduler kind** (`"local"`, `"slurm"`, `"pbs"`, `"lsf"`, `"shell"`)
+- a **scheduler kind** (`"local"`, `"slurm"`, `"pbs"`, `"lsf"`)
 - a **Transport** (defaults to `LocalTransport`; pass `host="user@host"` to
   use SSH)
 - optional **scheduler options** (`SlurmSchedulerOptions`, etc.)
+
+`scheduler="local"` is the no-batch-system backend; the *transport* decides
+where it runs. With `LocalTransport` jobs run on this host; with
+`SshTransport` (or the `host=` shortcut) they run on a remote workstation
+that has no queue manager.
 
 A Cluster has no lifecycle state — no store, no monitor, no event bus. It
 is cheap to construct. Multiple Submitors can share a Cluster, or a Cluster
@@ -106,9 +112,9 @@ sub_hpc   = mq.Submitor(target=mq.Cluster("hpc", "slurm", host="..."))
 ## Scheduler — the protocol behind the kind string
 
 The `Scheduler` protocol is **internal**: users don't construct a Scheduler
-directly. It is the abstract interface that `LocalScheduler`,
-`SlurmScheduler`, `PBSScheduler`, `LSFScheduler`, and `ShellScheduler`
-implement, with methods:
+directly. It is the abstract interface that `ShellScheduler` (the backend
+for `scheduler="local"`), `SlurmScheduler`, `PBSScheduler`, and
+`LSFScheduler` implement, with methods:
 
 - `submit(spec, job_dir)` — translate a `JobSpec` into a scheduler submission
   (writes `run_slurm.sh`, calls `sbatch`, etc.)

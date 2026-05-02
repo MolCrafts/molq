@@ -7,10 +7,6 @@ from __future__ import annotations
 
 import os
 import re
-import signal
-import subprocess
-import threading
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -125,167 +121,6 @@ class SchedulerCapabilities:
 
 
 # ---------------------------------------------------------------------------
-# Local Scheduler
-# ---------------------------------------------------------------------------
-
-
-class LocalScheduler:
-    """Execute jobs as local subprocesses.
-
-    Each spawned process runs in its own session (``start_new_session=True``)
-    so that signal-based cancellation can target the entire process group.
-    A background reaper thread ``wait()``s every handle to make sure no
-    completed job is left as a zombie attached to this process.
-    """
-
-    def __init__(self, options: LocalSchedulerOptions | None = None) -> None:
-        self._opts = options or LocalSchedulerOptions()
-        self._procs: dict[int, subprocess.Popen] = {}
-        self._procs_lock = threading.Lock()
-
-    def capabilities(self) -> SchedulerCapabilities:
-        return SchedulerCapabilities(
-            supports_cwd=True,
-            supports_env=True,
-            supports_output_file=True,
-            supports_error_file=True,
-        )
-
-    def submit(self, spec: JobSpec, job_dir: Path) -> str:
-        script_path = self._materialize_script(spec, job_dir)
-        exit_code_path = job_dir / ".exit_code"
-
-        # Wrapper that records exit code.  fsync after writing so the bytes
-        # are durable on disk before bash tries to interpret them — matters on
-        # NFS / slow disks where the kernel buffer hasn't flushed yet.
-        wrapper_path = job_dir / "_wrapper.sh"
-        _atomic_write_script(
-            wrapper_path,
-            f'#!/bin/bash\nbash "{script_path}"\necho $? > "{exit_code_path}"\n',
-        )
-
-        cwd = spec.execution.cwd or spec.cwd
-        env = None
-        if spec.execution.env:
-            env = {**os.environ, **spec.execution.env}
-
-        stdout_handle = _open_output_handle(spec.execution.output_file)
-        stderr_handle = _open_output_handle(spec.execution.error_file)
-
-        try:
-            proc = subprocess.Popen(
-                ["bash", str(wrapper_path)],
-                cwd=str(cwd),
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=stdout_handle or subprocess.DEVNULL,
-                stderr=stderr_handle or subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        finally:
-            if stdout_handle is not None:
-                stdout_handle.close()
-            if stderr_handle is not None:
-                stderr_handle.close()
-        self._track(proc)
-        return str(proc.pid)
-
-    def _track(self, proc: subprocess.Popen) -> None:
-        """Hold a reference to the Popen and reap it when it exits."""
-        with self._procs_lock:
-            self._procs[proc.pid] = proc
-
-        def _reap() -> None:
-            try:
-                proc.wait()
-            except Exception:
-                logger.debug(f"reaper failed for pid={proc.pid}", exc_info=True)
-            finally:
-                with self._procs_lock:
-                    self._procs.pop(proc.pid, None)
-
-        t = threading.Thread(target=_reap, name=f"molq-reaper-{proc.pid}", daemon=True)
-        t.start()
-
-    def poll_many(self, scheduler_job_ids: Sequence[str]) -> dict[str, JobState]:
-        result: dict[str, JobState] = {}
-        for pid_str in scheduler_job_ids:
-            try:
-                pid = int(pid_str)
-                os.kill(pid, 0)
-                result[pid_str] = JobState.RUNNING
-            except ProcessLookupError:
-                # Process gone — will be resolved via resolve_terminal
-                pass
-            except (ValueError, PermissionError):
-                pass
-        return result
-
-    def cancel(self, scheduler_job_id: str) -> None:
-        try:
-            pid = int(scheduler_job_id)
-        except ValueError:
-            return
-        # Signal the whole session (negative pid) so children die too.
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                return
-
-        # Brief grace period, then SIGKILL whatever is left.
-        deadline = time.monotonic() + 0.5
-        while time.monotonic() < deadline:
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                return
-            time.sleep(0.02)
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-
-    def resolve_terminal(self, scheduler_job_id: str) -> TerminalStatus | None:
-        # We cannot determine exit code without the job_dir here.
-        # The reconciler passes through resolve_terminal_with_dir instead.
-        return None
-
-    def list_queue(self, *, user: str | None = None) -> list[QueueEntry]:
-        return []
-
-    def resolve_terminal_with_dir(
-        self, scheduler_job_id: str, job_dir: Path
-    ) -> TerminalStatus | None:
-        """Check the exit code file written by the wrapper script."""
-        exit_code_path = job_dir / ".exit_code"
-        if exit_code_path.exists():
-            try:
-                code = int(exit_code_path.read_text().strip())
-                state = JobState.SUCCEEDED if code == 0 else JobState.FAILED
-                reason = None if code == 0 else f"process exited with code {code}"
-                return TerminalStatus(
-                    state=state, exit_code=code, failure_reason=reason
-                )
-            except (ValueError, OSError):
-                pass
-        return TerminalStatus(
-            state=JobState.LOST,
-            failure_reason="exit code file missing for local job",
-        )
-
-    def _materialize_script(self, spec: JobSpec, job_dir: Path) -> Path:
-        script_path = job_dir / "run.sh"
-        _atomic_write_script(script_path, _render_job_script(spec, job_dir))
-        return script_path
-
-
-# ---------------------------------------------------------------------------
 # Shell Scheduler (transport-aware "no batch system, just run it")
 # ---------------------------------------------------------------------------
 
@@ -293,17 +128,14 @@ class LocalScheduler:
 class ShellScheduler:
     """Run jobs via a plain shell on whatever the transport points at.
 
-    Where :class:`LocalScheduler` uses an in-process :class:`subprocess.Popen`
-    and a reaper thread, ``ShellScheduler`` is transport-agnostic: it writes a
-    wrapper script that backgrounds the user command, captures its pid into a
-    sibling file, and writes the exit code on completion.  Polling reads those
-    files via the transport instead of touching local OS state.
-
-    The trade-off vs ``LocalScheduler`` is one extra fork (the wrapper) per
-    job — negligible against any real workload.  The benefit is that
-    ``ShellScheduler(transport=SshTransport(...))`` runs jobs directly on a
-    remote workstation with no batch system, which is the canonical "I just
-    want to ssh into my desktop and run this" use case.
+    The single "no batch system" backend.  ``ShellScheduler`` writes a wrapper
+    script that backgrounds the user command, captures its pid into a sibling
+    file, and writes the exit code on completion.  Polling reads those files
+    via the transport instead of touching local OS state — so the same
+    implementation drives both ``Cluster(scheduler="local")`` (pairing with
+    :class:`~molq.transport.LocalTransport`) and ``Cluster(scheduler="local",
+    host=...)`` (paired with :class:`~molq.transport.SshTransport` for "ssh
+    into my workstation and run this").
     """
 
     def __init__(
@@ -1222,24 +1054,17 @@ def create_scheduler(
     options: SchedulerOptions | None = None,
     *,
     transport: Transport | None = None,
-) -> LocalScheduler | ShellScheduler | SlurmScheduler | PBSScheduler | LSFScheduler:
+) -> ShellScheduler | SlurmScheduler | PBSScheduler | LSFScheduler:
     """Create a Scheduler implementation by name.
 
-    The optional *transport* parameter routes shell/file ops through the given
-    :class:`~molq.transport.Transport`.  Defaults preserve pre-transport
-    behaviour: ``"local"`` ignores *transport* and uses the legacy
-    in-process :class:`LocalScheduler` (Popen + reaper); the new
-    transport-aware ``"shell"`` returns :class:`ShellScheduler` which works
-    over both :class:`~molq.transport.LocalTransport` and
-    :class:`~molq.transport.SshTransport`.
+    Pipelines are built by composing a :class:`Scheduler` with a
+    :class:`~molq.transport.Transport`.  ``"local"`` is the no-batch-system
+    backend (:class:`ShellScheduler`); the transport decides whether commands
+    run on this host (:class:`~molq.transport.LocalTransport`) or on a remote
+    workstation (:class:`~molq.transport.SshTransport`).  ``"slurm"``,
+    ``"pbs"`` and ``"lsf"`` route batch commands through the same transport.
     """
     if scheduler_name == "local":
-        # LocalScheduler keeps the original in-process Popen path; transport
-        # is intentionally ignored (it has no remote semantics by design).
-        return LocalScheduler(
-            options if isinstance(options, LocalSchedulerOptions) else None
-        )
-    if scheduler_name == "shell":
         return ShellScheduler(
             options if isinstance(options, LocalSchedulerOptions) else None,
             transport=transport,
@@ -1274,22 +1099,6 @@ def _shell_quote(s: str) -> str:
     if re.match(r"^[a-zA-Z0-9_/.\-=:@]+$", s):
         return s
     return "'" + s.replace("'", "'\"'\"'") + "'"
-
-
-def _atomic_write_script(path: Path, content: str) -> None:
-    """Write a shell script and ``fsync`` it before chmod.
-
-    Without ``fsync`` the contents may still sit in the page cache when bash
-    is exec'd against the file — usually fine on a local SSD, but on NFS or
-    a slow disk under heavy concurrency this can lead to bash seeing an
-    empty script.
-    """
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(content)
-        f.flush()
-        os.fsync(f.fileno())
-    os.chmod(str(path), 0o700)
 
 
 def _render_job_script(spec: JobSpec, job_dir: Path) -> str:
@@ -1386,11 +1195,3 @@ def _default_failure_reason(
     if raw_state:
         return f"job failed with scheduler state {raw_state}"
     return "job failed"
-
-
-def _open_output_handle(path: str | None):
-    if path is None:
-        return None
-    output_path = Path(path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    return output_path.open("ab")

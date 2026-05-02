@@ -22,7 +22,8 @@ A submission destination — scheduler kind + transport bound together. No
 lifecycle state; cheap to construct.
 
 - `name` — namespace used to scope persisted records and CLI listings
-- `scheduler` — one of `"local"`, `"slurm"`, `"pbs"`, `"lsf"`, `"shell"`
+- `scheduler` — one of `"local"`, `"slurm"`, `"pbs"`, `"lsf"`. `"local"`
+  is the no-batch-system backend; the *transport* decides where it runs.
 - `host` — SSH shortcut. Builds `SshTransport(SshTransportOptions(host=host))`. **Mutually exclusive** with `transport`.
 - `transport` — explicit Transport (use when you need custom SSH options). **Mutually exclusive** with `host`.
 - `scheduler_options` — scheduler-specific options dataclass (see [Schedulers](schedulers.md))
@@ -276,10 +277,12 @@ class Scheduler(Protocol):
     def list_queue(self, *, user: str | None = None) -> list[QueueEntry]: ...
 ```
 
-Implementations: `LocalScheduler`, `ShellScheduler`, `SlurmScheduler`,
-`PBSScheduler`, `LSFScheduler`. All the cluster-side ones (`Slurm/PBS/LSF`)
-go through `self._transport.run(...)` for every shell call, so they work
-identically over SSH.
+Implementations: `ShellScheduler` (the backend for `scheduler="local"`),
+`SlurmScheduler`, `PBSScheduler`, `LSFScheduler`. All four route every
+shell call through `self._transport.run(...)`, so any combination of
+scheduler kind and Transport works without scheduler-specific glue —
+including remote SLURM over SSH or running plain shell jobs on a remote
+workstation that has no batch system.
 
 ### `SchedulerCapabilities`
 

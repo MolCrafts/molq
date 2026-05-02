@@ -42,8 +42,10 @@ class Cluster:
 
     Args:
         name: Cluster label used to scope persisted records.
-        scheduler: One of ``"local"``, ``"slurm"``, ``"pbs"``, ``"lsf"``,
-            or ``"shell"`` (transport-aware shell scheduler).
+        scheduler: One of ``"local"``, ``"slurm"``, ``"pbs"``, ``"lsf"``.
+            ``"local"`` is the no-batch-system backend; pair it with a
+            non-default ``transport`` (or pass ``host=`` for SSH) to run jobs
+            on a remote workstation without a queue manager.
         host: SSH shortcut.  If provided, builds an :class:`~molq.transport.SshTransport`
             from :class:`~molq.options.SshTransportOptions(host=host)`.  Mutually
             exclusive with ``transport``.
@@ -67,13 +69,13 @@ class Cluster:
                 "Cluster: pass either host=... or transport=..., not both",
                 cluster=name,
             )
-        if scheduler not in OPTIONS_TYPE_MAP and scheduler != "shell":
+        if scheduler not in OPTIONS_TYPE_MAP:
             raise ConfigError(
                 f"Unknown scheduler {scheduler!r}. "
-                f"Must be one of: {', '.join(list(OPTIONS_TYPE_MAP) + ['shell'])}",
+                f"Must be one of: {', '.join(OPTIONS_TYPE_MAP)}",
                 scheduler=scheduler,
             )
-        if scheduler_options is not None and scheduler in OPTIONS_TYPE_MAP:
+        if scheduler_options is not None:
             expected = OPTIONS_TYPE_MAP[scheduler]
             if not isinstance(scheduler_options, expected):
                 raise TypeError(
@@ -96,7 +98,9 @@ class Cluster:
             self._scheduler_impl = _scheduler_impl
         else:
             self._scheduler_impl = create_scheduler(
-                scheduler, scheduler_options, transport=self._transport,
+                scheduler,
+                scheduler_options,
+                transport=self._transport,
             )
 
     # ------------------------------------------------------------------
@@ -135,7 +139,7 @@ class Cluster:
         """
         return self._scheduler_impl.list_queue(user=user)
 
-    def get_workspace(self, name: str, *, path: str) -> "Workspace":
+    def get_workspace(self, name: str, *, path: str) -> Workspace:
         """Return a :class:`~molq.workspace.Workspace` rooted at *path*.
 
         ``path`` is the absolute path on the cluster's filesystem (i.e., on the
@@ -146,7 +150,7 @@ class Cluster:
 
         return Workspace(cluster=self, name=name, path=path)
 
-    def get_project(self, name: str, *, workspace: "Workspace") -> "Project":
+    def get_project(self, name: str, *, workspace: Workspace) -> Project:
         """Return a :class:`~molq.workspace.Project` under *workspace*.
 
         ``workspace`` must be supplied explicitly — the cluster's filesystem
@@ -167,7 +171,7 @@ class Cluster:
         profile_name: str,
         *,
         config_path: str | Path | None = None,
-    ) -> "Cluster":
+    ) -> Cluster:
         """Load destination half of a profile (scheduler, host, scheduler_options)."""
         from molq.config import load_profile
 

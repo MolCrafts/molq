@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS molq_meta (
 
 # v3: dropped UNIQUE(cluster_name, scheduler_job_id).  job_id (UUID) already
 # guarantees row identity, and OS-level PID reuse used to make the constraint
-# fire spuriously when the LocalScheduler reused a freed PID.
+# fire spuriously when the local scheduler reused a freed PID.
 _CREATE_JOBS = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id TEXT PRIMARY KEY,

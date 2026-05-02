@@ -205,7 +205,8 @@ class JobReconciler:
         fallback_state: JobState | None = None,
     ) -> TerminalStatus:
         """Determine terminal state for a disappeared job."""
-        # For LocalScheduler, use resolve_terminal_with_dir if available
+        # ShellScheduler resolves terminal status from job_dir/.exit_code; the
+        # batch backends don't need job_dir.  Duck-type the optional method.
         resolve_with_dir = getattr(
             type(self._scheduler), "resolve_terminal_with_dir", None
         )
