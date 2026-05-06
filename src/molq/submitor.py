@@ -397,6 +397,91 @@ class Submitor:
 
         return {"job_dirs": deleted_dirs, "records": deleted_records}
 
+    def fetch_logs(
+        self,
+        job_id: str,
+        *,
+        dest_dir: str | Path | None = None,
+        streams: tuple[str, ...] = ("stdout", "stderr"),
+    ) -> dict[str, Path]:
+        """Pull captured log files from the cluster's filesystem to local.
+
+        The job's recorded log paths (``metadata["molq.stdout_path"]`` /
+        ``"molq.stderr_path"``) live on the cluster's filesystem.  For a
+        remote :class:`~molq.cluster.Cluster` (SSH transport), this method
+        rsyncs them down to *dest_dir*.  For a local cluster, it's a copy.
+
+        Args:
+            job_id: Job to fetch logs for.
+            dest_dir: Local directory.  Defaults to a per-job folder under
+                the local jobs_dir.
+            streams: Subset of ``("stdout", "stderr")``.
+
+        Returns:
+            Mapping ``stream_name -> local_path`` for streams that existed
+            on the remote side.  Missing-on-remote streams are silently
+            skipped.
+
+        Raises:
+            JobNotFoundError: When *job_id* is unknown.
+        """
+        record = self.get_job(job_id)
+        keys = {"stdout": "molq.stdout_path", "stderr": "molq.stderr_path"}
+
+        if dest_dir is None:
+            # _jobs_dir is None by default — fall back to a local scratch
+            # directory rather than the (possibly remote) per-job cwd.
+            base = self._jobs_dir or Path.cwd() / ".molq" / "fetched"
+            dest = base / job_id / "logs"
+        else:
+            dest = Path(dest_dir).expanduser()
+        dest.mkdir(parents=True, exist_ok=True)
+
+        out: dict[str, Path] = {}
+        transport = self._target.transport
+        for stream in streams:
+            remote_path = record.metadata.get(keys[stream])
+            if not remote_path:
+                continue
+            if not transport.exists(remote_path):
+                continue
+            local_path = dest / f"{stream}.log"
+            transport.download(remote_path, str(local_path))
+            out[stream] = local_path
+        return out
+
+    def fetch_artifacts(
+        self,
+        job_id: str,
+        *,
+        dest_dir: str | Path | None = None,
+        exclude: tuple[str, ...] = (),
+    ) -> Path:
+        """Mirror the job's working directory back to a local folder.
+
+        Behaves like ``rsync -a <job_dir>/ <dest_dir>/`` over the cluster's
+        transport — useful when the job emitted output files alongside its
+        scripts and you want the whole bundle locally.
+
+        Returns the local destination directory.
+        """
+        record = self.get_job(job_id)
+        job_dir = record.metadata.get("molq.job_dir")
+        if not job_dir:
+            raise FileNotFoundError(
+                f"Job {job_id} has no recorded molq.job_dir to mirror"
+            )
+        if dest_dir is None:
+            base = self._jobs_dir or Path.cwd() / ".molq" / "fetched"
+            dest = base / job_id / "mirror"
+        else:
+            dest = Path(dest_dir).expanduser()
+        dest.mkdir(parents=True, exist_ok=True)
+        self._target.transport.download(
+            job_dir, str(dest), recursive=True, exclude=exclude
+        )
+        return dest
+
     def run_daemon(
         self,
         *,
