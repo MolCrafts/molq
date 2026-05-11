@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-05-11
+
+### Breaking
+- **`JobStore(db_path)` now requires an explicit path.** Constructing
+  `JobStore()` with no argument used to silently default to
+  `~/.molq/jobs.db` via `Path.home()`, which entangled every caller
+  and every test run with the user's real on-disk database. The
+  no-arg form now raises `TypeError`.
+- **Canonical default location moved** from `~/.molq/jobs.db` to
+  `~/.molcrafts/molq/config/jobs.db` (resolved via
+  `molcfg.project_config_dir("molq")`, which honours `MOLCRAFTS_HOME`
+  for redirection). The same move applies to `default_config_path()`
+  for `~/.molq/config.toml` → `~/.molcrafts/molq/config/config.toml`.
+  No automatic migration. To preserve existing data:
+
+  ```bash
+  mkdir -p ~/.molcrafts/molq/config
+  mv ~/.molq/jobs.db     ~/.molcrafts/molq/config/jobs.db
+  mv ~/.molq/config.toml ~/.molcrafts/molq/config/config.toml
+  ```
+
+### Added
+- `molq.store.default_jobs_db_path()` — the only sanctioned source
+  of a default DB location. Delegates to
+  `molcfg.project_config_dir("molq")` which idempotently creates the
+  directory on first call.
+- `molq.ssh_config` — parsing of `~/.ssh/config` host profiles, with
+  `tests/test_ssh_config.py` covering it.
+- `molq.cluster` and `molq.workspace` — Cluster type extension and
+  remote-workspace primitives.
+- `examples/dardel_e2e.py` — end-to-end example exercising SSH
+  transport against a Dardel-style remote host.
+
+### Changed
+- `Submitor(store=None)` still auto-bootstraps a `JobStore` (UX
+  unchanged — user does not have to manually specify), but the path
+  is now resolved explicitly through
+  `JobStore(default_jobs_db_path())` rather than a hidden
+  `Path.home()` lookup inside `JobStore.__init__`.
+- CLI `--db` help text reflects the new molcfg-derived default.
+
+### Removed
+- `test_ssh_round_trip_against_real_host` — an env-gated
+  (`MOLQ_SSH_TEST_HOST`) integration test that nobody ever set the
+  variable for, so it never actually ran. Real SSH coverage belongs
+  in a CI-provisioned integration suite, not in `test_transport.py`
+  as default-skipped theatre.
+
 ## [0.4.0] - 2026-05-02
 
 ### Changed
