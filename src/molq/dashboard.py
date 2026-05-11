@@ -543,7 +543,9 @@ class MolqMonitor:
     Reads from :class:`~molq.store.JobStore` on every refresh tick.
 
     Args:
-        db_path: SQLite database path.  ``None`` → ``~/.molq/jobs.db``.
+        db_path: SQLite database path.  ``None`` resolves to the
+            molcrafts-standard location via
+            :func:`molq.store.default_jobs_db_path`.
         include_terminal: Show completed/failed jobs too.  Default ``False``.
         limit: Maximum job rows displayed.  Default 200.
         refresh_interval: Seconds between data refreshes.
@@ -564,9 +566,11 @@ class MolqMonitor:
 
     def watch(self) -> None:
         """Open the full-screen dashboard and block until ``q`` is pressed."""
-        from molq.store import JobStore
+        from molq.store import JobStore, default_jobs_db_path
 
-        store = JobStore(self._db_path)
+        store = JobStore(
+            self._db_path if self._db_path is not None else default_jobs_db_path()
+        )
         try:
             self._run_dashboard(store)
         finally:

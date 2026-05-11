@@ -59,7 +59,15 @@ class _ProfileSchema:
 
 
 def default_config_path() -> Path:
-    return Path.home() / ".molq" / "config.toml"
+    """Return the canonical molq config.toml path, bootstrapping the dir.
+
+    Delegates to :func:`molcfg.paths.project_config_dir` so the dir is
+    created idempotently on first call and ``MOLCRAFTS_HOME`` is
+    honoured for redirection (tests, ops, multi-user hosts).
+    """
+    from molcfg.paths import project_config_dir
+
+    return project_config_dir("molq") / "config.toml"
 
 
 def load_config(path: str | Path | None = None) -> MolqConfig:

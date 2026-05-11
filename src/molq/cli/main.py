@@ -748,7 +748,10 @@ def monitor(
     db: Annotated[
         str | None,
         typer.Option(
-            "--db", help="Path to molq SQLite database (default: ~/.molq/jobs.db)."
+            "--db",
+            help="Path to molq SQLite database. Defaults to the molcrafts-standard "
+            "location resolved via molcfg (~/.molcrafts/molq/config/jobs.db, or "
+            "$MOLCRAFTS_HOME/molq/config/jobs.db if set).",
         ),
     ] = None,
 ) -> None:

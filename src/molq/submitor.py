@@ -52,7 +52,7 @@ from molq.serde import (
     serialize_script,
 )
 from molq.status import JobState
-from molq.store import JobStore
+from molq.store import JobStore, default_jobs_db_path
 from molq.transport import Transport
 from molq.types import DependencyRef, JobExecution, JobResources, JobScheduling, Script
 
@@ -102,7 +102,10 @@ class Submitor:
     Args:
         target: The destination Cluster.
         defaults: Default resource/scheduling/execution parameters.
-        store: Custom JobStore (default: ``~/.molq/jobs.db``).
+        store: Custom JobStore.  When ``None``, auto-bootstraps a
+            ``JobStore`` at the molcrafts-standard location via
+            :func:`molq.store.default_jobs_db_path` (which delegates
+            to :func:`molcfg.paths.project_config_dir`).
         jobs_dir: Optional override for per-job artifacts.  When omitted,
             materialized scripts and default logs are written under the
             submission working directory at ``.molq/jobs/<job-id>/``.
@@ -135,7 +138,11 @@ class Submitor:
             )
         self._target = target
         self._defaults = defaults
-        self._store = store or JobStore()
+        # Explicit auto-bootstrap via molcfg — no silent ``Path.home()``
+        # fallback in ``JobStore`` itself.  Callers that want isolation
+        # (tests, ops) pass a fully-constructed ``JobStore`` or set
+        # ``MOLCRAFTS_HOME`` to redirect the bootstrap location.
+        self._store = store if store is not None else JobStore(default_jobs_db_path())
         self._jobs_dir = self._resolve_jobs_dir(jobs_dir)
         self._default_retry_policy = default_retry_policy
         self._retention_policy = retention_policy or RetentionPolicy()
