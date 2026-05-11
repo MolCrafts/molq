@@ -748,7 +748,10 @@ def monitor(
     db: Annotated[
         str | None,
         typer.Option(
-            "--db", help="Path to molq SQLite database (default: ~/.molq/jobs.db)."
+            "--db",
+            help="Path to molq SQLite database. Defaults to the molcrafts-standard "
+            "location resolved via molcfg (~/.molcrafts/molq/config/jobs.db, or "
+            "$MOLCRAFTS_HOME/molq/config/jobs.db if set).",
         ),
     ] = None,
 ) -> None:
@@ -842,6 +845,120 @@ def daemon(
             )
         except KeyboardInterrupt:
             rprint("[dim]Daemon interrupted[/]")
+
+
+# ---------------------------------------------------------------------------
+# clusters — discovery from ~/.ssh/config + ~/.molq/config.toml profiles
+# ---------------------------------------------------------------------------
+
+
+clusters_app = typer.Typer(
+    name="clusters",
+    help="Inspect cluster destinations: SSH config aliases + molq profiles.",
+    no_args_is_help=True,
+)
+app.add_typer(clusters_app, name="clusters")
+
+
+def _profile_destinations(config_path: str | None) -> list[dict[str, str]]:
+    from molq import load_config
+
+    rows: list[dict[str, str]] = []
+    cfg = load_config(config_path)
+    for profile in cfg.profiles.values():
+        rows.append(
+            {
+                "name": profile.cluster_name,
+                "source": f"profile:{profile.name}",
+                "scheduler": profile.scheduler,
+                "target": "(profile)",
+            }
+        )
+    return rows
+
+
+def _ssh_destinations(ssh_config: str | None) -> list[dict[str, str]]:
+    from molq import list_ssh_hosts
+
+    rows: list[dict[str, str]] = []
+    for host in list_ssh_hosts(ssh_config):
+        rows.append(
+            {
+                "name": host.alias,
+                "source": "ssh_config",
+                "scheduler": "?",
+                "target": host.target,
+            }
+        )
+    return rows
+
+
+@clusters_app.command("list")
+def clusters_list(
+    config: Annotated[str | None, typer.Option(help="Path to molq config.toml")] = None,
+    ssh_config: Annotated[
+        str | None, typer.Option(help="Path to ssh_config (default: ~/.ssh/config)")
+    ] = None,
+) -> None:
+    """List cluster destinations from molq profiles and ~/.ssh/config."""
+    profile_rows = _profile_destinations(config)
+    ssh_rows = _ssh_destinations(ssh_config)
+
+    if not profile_rows and not ssh_rows:
+        rprint("[dim]No clusters discovered.[/]")
+        return
+
+    table = Table(title="Clusters")
+    table.add_column("Name", style="cyan")
+    table.add_column("Source")
+    table.add_column("Scheduler")
+    table.add_column("Target")
+    for row in profile_rows + ssh_rows:
+        table.add_row(row["name"], row["source"], row["scheduler"], row["target"])
+    rprint(table)
+
+
+@clusters_app.command("show")
+def clusters_show(
+    name: Annotated[str, typer.Argument(help="Cluster alias or profile name")],
+    config: Annotated[str | None, typer.Option(help="Path to molq config.toml")] = None,
+    ssh_config: Annotated[
+        str | None, typer.Option(help="Path to ssh_config (default: ~/.ssh/config)")
+    ] = None,
+) -> None:
+    """Show effective settings for a cluster — profile or SSH alias."""
+    from molq import load_config, resolve_ssh_host
+
+    cfg = load_config(config)
+    profile = next(
+        (p for p in cfg.profiles.values() if p.name == name or p.cluster_name == name),
+        None,
+    )
+    if profile is not None:
+        rprint(f"[bold]Profile:[/] {profile.name}")
+        rprint(f"  Cluster:   {profile.cluster_name}")
+        rprint(f"  Scheduler: {profile.scheduler}")
+        if profile.scheduler_options is not None:
+            rprint(f"  Options:   {profile.scheduler_options}")
+        if profile.jobs_dir:
+            rprint(f"  Jobs dir:  {profile.jobs_dir}")
+        return
+
+    try:
+        host = resolve_ssh_host(name)
+    except OSError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+
+    rprint(f"[bold]SSH alias:[/] {host.alias}")
+    rprint(f"  Hostname:      {host.hostname or '-'}")
+    rprint(f"  User:          {host.user or '-'}")
+    rprint(f"  Port:          {host.port or 22}")
+    rprint(f"  IdentityFile:  {host.identity_file or '-'}")
+    if host.proxy_jump:
+        rprint(f"  ProxyJump:     {host.proxy_jump}")
+    if host.forward_agent:
+        rprint("  ForwardAgent:  yes")
 
 
 if __name__ == "__main__":

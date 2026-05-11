@@ -55,6 +55,7 @@ from molq.options import (
     SlurmSchedulerOptions,
 )
 from molq.scheduler import QueueEntry, SchedulerCapabilities
+from molq.ssh_config import SshHost, list_ssh_hosts, resolve_ssh_host
 from molq.status import JobState
 from molq.store import dependency_relation_state
 from molq.submitor import JobHandle, Submitor
@@ -119,6 +120,10 @@ __all__ = [
     "SlurmSchedulerOptions",
     "PBSSchedulerOptions",
     "LSFSchedulerOptions",
+    # SSH
+    "SshHost",
+    "list_ssh_hosts",
+    "resolve_ssh_host",
     # Errors
     "MolqError",
     "ConfigError",

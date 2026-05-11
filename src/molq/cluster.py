@@ -182,6 +182,39 @@ class Cluster:
             scheduler_options=profile.scheduler_options,
         )
 
+    @classmethod
+    def from_ssh_alias(
+        cls,
+        alias: str,
+        *,
+        scheduler: str = "slurm",
+        name: str | None = None,
+        scheduler_options: SchedulerOptions | None = None,
+        config_path: str | Path | None = None,
+    ) -> Cluster:
+        """Build a Cluster from a ``Host`` alias in ``~/.ssh/config``.
+
+        ``alias`` is resolved through ``ssh -G`` so the resulting
+        :class:`~molq.transport.SshTransport` carries the effective
+        hostname/user/port/identityfile.  ``name`` defaults to *alias*; pass
+        an explicit value when the cluster name should differ from the SSH
+        alias (e.g., when persisting records under a stable label).
+        """
+        from molq.ssh_config import resolve_ssh_host
+
+        host = resolve_ssh_host(alias)
+        opts = SshTransportOptions(
+            host=alias,
+            port=host.port,
+            identity_file=host.identity_file,
+        )
+        return cls(
+            name or alias,
+            scheduler,
+            transport=SshTransport(opts),
+            scheduler_options=scheduler_options,
+        )
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

@@ -3,15 +3,14 @@
 ``LocalTransport`` is exercised against a real subprocess + tmp_path filesystem
 because it has no external dependencies.  ``SshTransport`` is exercised at the
 *argv-construction* level by injecting fake binaries — we never want CI to
-require an SSH daemon.  An opt-in integration test (gated on
-``MOLQ_SSH_TEST_HOST``) round-trips against a real host.
+require an SSH daemon.  End-to-end SSH coverage against a real host belongs
+in a CI-provisioned integration suite, not in this unit-test module.
 """
 
 from __future__ import annotations
 
 import base64
 import os
-import shutil
 import stat
 import sys
 from pathlib import Path
@@ -478,31 +477,3 @@ def test_ssh_upload_invokes_rsync(
     assert argv[-1] == "cluster:/scratch/work"
     # source has trailing slash for directory recursion
     assert argv[-2].endswith("/")
-
-
-# ---------------------------------------------------------------------------
-# Opt-in integration test (real ssh + rsync)
-# ---------------------------------------------------------------------------
-
-
-SSH_TEST_HOST = os.environ.get("MOLQ_SSH_TEST_HOST")
-
-
-@pytest.mark.skipif(SSH_TEST_HOST is None, reason="set MOLQ_SSH_TEST_HOST to enable")
-@pytest.mark.skipif(
-    shutil.which("ssh") is None or shutil.which("rsync") is None,
-    reason="ssh or rsync not installed",
-)
-def test_ssh_round_trip_against_real_host(tmp_path: Path) -> None:
-    t = SshTransport(options=SshTransportOptions(host=SSH_TEST_HOST))  # type: ignore[arg-type]
-    remote_dir = "/tmp/molq-test-roundtrip"
-    t.mkdir(remote_dir)
-    try:
-        t.write_text(f"{remote_dir}/hello.txt", "hello\n")
-        assert t.read_text(f"{remote_dir}/hello.txt") == "hello\n"
-        assert t.exists(f"{remote_dir}/hello.txt")
-        local_dst = tmp_path / "back.txt"
-        t.download(f"{remote_dir}/hello.txt", str(local_dst))
-        assert local_dst.read_text() == "hello\n"
-    finally:
-        t.remove(remote_dir, recursive=True)

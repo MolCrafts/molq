@@ -14,6 +14,8 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+from molcfg.paths import project_config_dir
+
 from molq.errors import StoreError
 from molq.models import (
     DependencyPreview,
@@ -111,12 +113,32 @@ ON job_dependencies(job_id)
 """
 
 
+def default_jobs_db_path() -> Path:
+    """Return the canonical molq jobs.db path, bootstrapping the dir.
+
+    Delegates to :func:`molcfg.paths.project_config_dir`, which
+    resolves ``~/.molcrafts/molq/config/`` (honouring the
+    ``MOLCRAFTS_HOME`` env var) and creates it idempotently on first
+    call. The returned path always points at
+    ``<that dir>/jobs.db`` — the file itself is created by SQLite when
+    :class:`JobStore` opens its connection.
+
+    This is the only sanctioned source of a default DB location.
+    :class:`JobStore` no longer silently falls back to a built-in
+    path; callers that want the standard location must pass
+    ``JobStore(default_jobs_db_path())`` explicitly.
+    """
+    return project_config_dir("molq") / "jobs.db"
+
+
 class JobStore:
     """SQLite-backed job persistence with WAL mode.
 
     Args:
-        db_path: Path to database file. Use ':memory:' for testing.
-                 Defaults to ~/.molq/jobs.db.
+        db_path: Path to database file. Use ``':memory:'`` for testing.
+            Required — no silent fallback. For the canonical
+            molcrafts location, pass
+            ``default_jobs_db_path()``.
     """
 
     # Always set after __init__; close() flips it to None as an escape hatch
@@ -125,11 +147,13 @@ class JobStore:
     # own "Cannot operate on a closed database" error.
     _conn: sqlite3.Connection
 
-    def __init__(self, db_path: Path | str | None = None) -> None:
+    def __init__(self, db_path: Path | str) -> None:
         if db_path is None:
-            molq_dir = Path.home() / ".molq"
-            molq_dir.mkdir(exist_ok=True)
-            db_path = molq_dir / "jobs.db"
+            raise TypeError(
+                "JobStore(db_path) requires an explicit path. "
+                "For the canonical molcrafts location, pass "
+                "`default_jobs_db_path()` from molq.store."
+            )
 
         self.db_path = Path(db_path) if db_path != ":memory:" else db_path
         self._write_lock = threading.RLock()

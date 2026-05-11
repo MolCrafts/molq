@@ -17,7 +17,10 @@ Decisions:
 
 from __future__ import annotations
 
+import shlex
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -54,6 +57,67 @@ class _RemoteDir:
     def ensure(self) -> None:
         """Create the directory if it doesn't exist (mkdir -p)."""
         self.cluster.transport.mkdir(self.path, parents=True, exist_ok=True)
+
+    def mirror(
+        self,
+        local_dir: str | Path,
+        *,
+        exclude: Sequence[str] = (),
+    ) -> Path:
+        """Pull the entire remote directory to *local_dir* (mirror).
+
+        Equivalent to ``rsync -a <transport>:<path>/ <local_dir>/``.  Creates
+        *local_dir* if needed.  Subsequent calls perform an incremental
+        sync — only changed files travel.
+
+        Returns the local destination path for convenience.
+        """
+        target = Path(local_dir).expanduser()
+        target.mkdir(parents=True, exist_ok=True)
+        self.cluster.transport.download(
+            self.path,
+            str(target),
+            recursive=True,
+            exclude=tuple(exclude),
+        )
+        return target
+
+    def list_files(self, rel: str = "") -> list[str]:
+        """Return a flat listing of paths under the remote directory.
+
+        Uses ``ls -1A`` on the transport — works for both local and SSH.
+        ``rel`` is a path relative to ``self.path`` (use ``""`` for the root).
+        """
+        target = self.path.rstrip("/")
+        if rel:
+            target = f"{target}/{rel.lstrip('/')}"
+        result = self.cluster.transport.run(
+            ["sh", "-c", f"ls -1A {shlex.quote(target)}"]
+        )
+        if result.returncode != 0:
+            return []
+        return [line for line in result.stdout.splitlines() if line]
+
+    def read_text(self, rel: str) -> str:
+        """Read a remote file relative to this dir as text."""
+        remote = f"{self.path.rstrip('/')}/{rel.lstrip('/')}"
+        return self.cluster.transport.read_text(remote)
+
+    def tail(self, rel: str, *, lines: int = 80) -> str:
+        """Cheap remote tail — runs ``tail -n <lines>`` over the transport.
+
+        Useful for log peeking without dragging the whole file across.
+        Returns ``""`` when the file does not exist yet.
+        """
+        remote = f"{self.path.rstrip('/')}/{rel.lstrip('/')}"
+        result = self.cluster.transport.run(
+            [
+                "sh",
+                "-c",
+                f"tail -n {int(lines)} {shlex.quote(remote)} 2>/dev/null || true",
+            ]
+        )
+        return result.stdout
 
 
 @dataclass
