@@ -3,6 +3,7 @@
 # tox remains in [project.optional-dependencies] dev for optional local isolation.
 
 default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit, pre-push]
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
