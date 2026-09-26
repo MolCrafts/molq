@@ -378,6 +378,32 @@ class Submitor:
         """Reconcile all active jobs with the scheduler."""
         self._reconciler.reconcile()
 
+    def refresh_job(self, job_id: str) -> JobRecord:
+        """Reconcile one job with the scheduler and return its current record.
+
+        Follows the retry family: the newest attempt of *job_id*'s family is
+        reconciled, and if that reconciliation submits a retry, the record of
+        the resulting attempt is returned. A job already in a terminal state is
+        not re-polled and emits no events.
+
+        Args:
+            job_id: Any attempt's ID in the retry family (typically the root).
+
+        Returns:
+            The record of the latest attempt after reconciliation.
+
+        Raises:
+            JobNotFoundError: If job doesn't exist.
+        """
+        latest = self._store.get_latest_attempt_record(job_id)
+        if latest is None:
+            raise JobNotFoundError(job_id, self._target.name)
+        self._reconciler.reconcile_one(latest.job_id)
+        current = self._store.get_latest_attempt_record(job_id)
+        if current is None:
+            raise JobNotFoundError(job_id, self._target.name)
+        return current
+
     def cleanup_jobs(
         self,
         *,

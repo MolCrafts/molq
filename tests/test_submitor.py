@@ -380,6 +380,66 @@ class TestSubmitorOps:
         assert transitions[-1].new_state == JobState.SUBMITTED
 
 
+class TestRefreshJob:
+    def test_refresh_job_reflects_scheduler_state_change(
+        self, submitor, mock_scheduler
+    ):
+        handle = submitor.submit_job(argv=["echo"])
+        before = submitor.refresh_job(handle.job_id)
+        assert before.job_id == handle.job_id
+        assert before.state == JobState.SUBMITTED
+
+        mock_scheduler.poll_many.return_value = {
+            handle.scheduler_job_id: JobState.SUCCEEDED
+        }
+        after = submitor.refresh_job(handle.job_id)
+        assert after.job_id == handle.job_id
+        assert after.state == JobState.SUCCEEDED
+        assert submitor.get_job(handle.job_id).state == JobState.SUCCEEDED
+
+    def test_refresh_job_terminal_does_not_repoll(self, submitor, mock_scheduler):
+        handle = submitor.submit_job(argv=["echo"])
+        mock_scheduler.poll_many.return_value = {
+            handle.scheduler_job_id: JobState.SUCCEEDED
+        }
+        submitor.refresh_job(handle.job_id)
+        mock_scheduler.poll_many.reset_mock()
+
+        record = submitor.refresh_job(handle.job_id)
+        assert record.state == JobState.SUCCEEDED
+        mock_scheduler.poll_many.assert_not_called()
+
+    def test_refresh_job_follows_retry_to_latest_attempt(self):
+        with make_submitor(
+            "retry",
+            outcomes=["failed", "succeeded"],
+            job_duration=0.0,
+        ) as s:
+            handle = s.submit_job(
+                argv=["echo", "hello"],
+                retry=RetryPolicy(
+                    max_attempts=2,
+                    backoff=RetryBackoff(initial_seconds=0.0, maximum_seconds=0.0),
+                ),
+            )
+            # First refresh observes attempt 1 fail, which synchronously
+            # submits attempt 2; the returned record is the new attempt.
+            record = s.refresh_job(handle.job_id)
+            assert record.attempt == 2
+            assert record.job_id != handle.job_id
+            assert record.previous_attempt_job_id == handle.job_id
+            assert s.get_job(handle.job_id).state == JobState.FAILED
+
+            # Refreshing by the root id keeps tracking the latest attempt.
+            final = s.refresh_job(handle.job_id)
+            assert final.job_id == record.job_id
+            assert final.state == JobState.SUCCEEDED
+
+    def test_refresh_job_unknown_raises(self, submitor):
+        with pytest.raises(JobNotFoundError):
+            submitor.refresh_job("nonexistent")
+
+
 # ---------------------------------------------------------------------------
 # JobHandle
 # ---------------------------------------------------------------------------
