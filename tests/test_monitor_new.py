@@ -61,6 +61,20 @@ class TestWaitOne:
         with pytest.raises(MolqTimeoutError, match="did not complete"):
             monitor.wait_one("j1", timeout=0.05)
 
+    def test_poll_miss_does_not_mark_lost(self, store):
+        _insert_job(store)
+
+        mock_scheduler = MagicMock()
+        mock_scheduler.poll_many.return_value = {}
+        mock_scheduler.resolve_terminal.return_value = None
+
+        reconciler = JobReconciler(mock_scheduler, store, "dev")
+        monitor = JobMonitor(reconciler, store, strategy=FixedStrategy(0.01))
+
+        with pytest.raises(MolqTimeoutError, match="did not complete"):
+            monitor.wait_one("j1", timeout=0.05)
+        assert store.get_record("j1").state == JobState.RUNNING
+
     def test_already_terminal(self, store):
         _insert_job(store)
         store.update_job("j1", state=JobState.SUCCEEDED)

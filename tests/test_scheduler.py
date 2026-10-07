@@ -131,6 +131,24 @@ class TestSlurmScheduler:
         assert scheduler.poll_many(["12345"]) == {}
 
     @patch("molq.transport.subprocess.run")
+    def test_poll_many_configuring_is_queued(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="12345 CF\n", returncode=0)
+        scheduler = SlurmScheduler()
+        assert scheduler.poll_many(["12345"]) == {"12345": JobState.QUEUED}
+
+    @patch("molq.transport.subprocess.run")
+    def test_poll_many_unknown_compact_code_stays_visible(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="12345 XX\n", returncode=0)
+        scheduler = SlurmScheduler()
+        assert scheduler.poll_many(["12345"]) == {"12345": JobState.QUEUED}
+
+    @patch("molq.transport.subprocess.run")
+    def test_poll_many_strips_batch_suffix(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="12345.batch R\n", returncode=0)
+        scheduler = SlurmScheduler()
+        assert scheduler.poll_many(["12345"]) == {"12345": JobState.RUNNING}
+
+    @patch("molq.transport.subprocess.run")
     def test_resolve_terminal_completed(self, mock_run):
         mock_run.return_value = MagicMock(stdout="COMPLETED|0:0\n", returncode=0)
         scheduler = SlurmScheduler()

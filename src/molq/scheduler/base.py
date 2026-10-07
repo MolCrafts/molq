@@ -37,7 +37,12 @@ class Scheduler(Protocol):
         ...
 
     def resolve_terminal(self, scheduler_job_id: str) -> TerminalStatus | None:
-        """Determine terminal status for a disappeared job."""
+        """Confirm a *terminal* status when the job is absent from ``poll_many``.
+
+        Return ``None`` when the outcome is unknown (not yet in accounting,
+        poll blip, nested-allocation ``squeue`` lag).  ``None`` means keep
+        waiting — it is not ``LOST``.
+        """
         ...
 
     def list_queue(self, *, user: str | None = None) -> list[QueueEntry]:

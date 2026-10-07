@@ -30,13 +30,28 @@ logger = get_logger(__name__)
 _SLURM_STATE_MAP: dict[str, JobState] = {
     "R": JobState.RUNNING,
     "PD": JobState.QUEUED,
-    "CD": JobState.SUCCEEDED,
+    "CF": JobState.QUEUED,
+    "RQ": JobState.QUEUED,
+    "RD": JobState.QUEUED,
+    "RH": JobState.QUEUED,
+    "RF": JobState.QUEUED,
+    "RS": JobState.QUEUED,
+    "S": JobState.QUEUED,
+    "ST": JobState.QUEUED,
+    "SI": JobState.RUNNING,
+    "SO": JobState.RUNNING,
     "CG": JobState.RUNNING,
+    "CD": JobState.SUCCEEDED,
     "CA": JobState.CANCELLED,
     "F": JobState.FAILED,
     "TO": JobState.TIMED_OUT,
     "NF": JobState.FAILED,
     "OOM": JobState.FAILED,
+    "PR": JobState.CANCELLED,
+    "DL": JobState.FAILED,
+    "SE": JobState.FAILED,
+    "RV": JobState.CANCELLED,
+    "BF": JobState.FAILED,
 }
 
 _SLURM_SACCT_MAP: dict[str, JobState] = {
@@ -133,14 +148,19 @@ class SlurmScheduler:
         if not result.stdout.strip():
             return {}
 
+        wanted = set(scheduler_job_ids)
         out: dict[str, JobState] = {}
         for line in result.stdout.strip().split("\n"):
             parts = line.split()
-            if len(parts) >= 2:
-                jid, st = parts[0], parts[1]
-                state = _SLURM_STATE_MAP.get(st)
-                if state is not None:
-                    out[jid] = state
+            if len(parts) < 2:
+                continue
+            jid, st = parts[0], parts[1]
+            # `%i` is the job id; ignore `.batch` / array suffixes if present.
+            bare = jid.split(".", 1)[0]
+            key = jid if jid in wanted else bare if bare in wanted else None
+            if key is None:
+                continue
+            out[key] = _SLURM_STATE_MAP.get(st, JobState.QUEUED)
         return out
 
     def cancel(self, scheduler_job_id: str) -> None:

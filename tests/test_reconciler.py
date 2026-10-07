@@ -104,10 +104,22 @@ class TestReconcile:
         assert changes[0].new_state == JobState.SUCCEEDED
         assert mock_scheduler.calls == [("s1", Path("/tmp/work/.molq/jobs/j1"))]
 
-    def test_disappeared_no_evidence_becomes_lost(self, store, mock_scheduler):
+    def test_disappeared_no_evidence_keeps_waiting(self, store, mock_scheduler):
+        """squeue/qstat miss + no accounting row is lag, not LOST."""
         _insert_job(store)
         mock_scheduler.poll_many.return_value = {}
         mock_scheduler.resolve_terminal.return_value = None
+
+        reconciler = JobReconciler(mock_scheduler, store, "dev")
+        changes = reconciler.reconcile()
+
+        assert changes == []
+        assert store.get_record("j1").state == JobState.SUBMITTED
+
+    def test_disappeared_resolve_lost_is_lost(self, store, mock_scheduler):
+        _insert_job(store)
+        mock_scheduler.poll_many.return_value = {}
+        mock_scheduler.resolve_terminal.return_value = JobState.LOST
 
         reconciler = JobReconciler(mock_scheduler, store, "dev")
         changes = reconciler.reconcile()
@@ -162,6 +174,31 @@ class TestReconcileOne:
         reconciler = JobReconciler(mock_scheduler, store, "dev")
         state = reconciler.reconcile_one("nonexistent")
         assert state is None
+
+    def test_reconcile_one_poll_miss_keeps_submitted(self, store, mock_scheduler):
+        _insert_job(store)
+        mock_scheduler.poll_many.return_value = {}
+        mock_scheduler.resolve_terminal.return_value = None
+
+        reconciler = JobReconciler(mock_scheduler, store, "dev")
+        state = reconciler.reconcile_one("j1")
+
+        assert state == JobState.SUBMITTED
+        assert store.get_record("j1").state == JobState.SUBMITTED
+
+    def test_reconcile_one_poll_miss_keeps_queued(self, store, mock_scheduler):
+        """The peo-tg incident: queued \u2192 lost 2s after sbatch because
+        squeue/sacct had not caught up. Stay queued."""
+        _insert_job(store)
+        store.update_job("j1", state=JobState.QUEUED)
+        mock_scheduler.poll_many.return_value = {}
+        mock_scheduler.resolve_terminal.return_value = None
+
+        reconciler = JobReconciler(mock_scheduler, store, "dev")
+        state = reconciler.reconcile_one("j1")
+
+        assert state == JobState.QUEUED
+        assert store.get_record("j1").state == JobState.QUEUED
 
 
 class TestReconcileQueryCost:

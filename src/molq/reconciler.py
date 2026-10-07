@@ -105,6 +105,12 @@ class JobReconciler:
                 )
             else:
                 terminal = self._infer_terminal(sid, record)
+                if terminal is None:
+                    # poll miss with no accounting evidence: keep waiting.
+                    # Brand-new SLURM jobs are often absent from squeue for a
+                    # beat (and sacct lags longer); that is not LOST.
+                    polled.append(record.job_id)
+                    continue
                 new_state = terminal.state
 
             polled.append(record.job_id)
@@ -164,6 +170,9 @@ class JobReconciler:
             )
         else:
             terminal = self._infer_terminal(sid, record)
+            if terminal is None:
+                self._store.update_job(job_id, last_polled=now)
+                return record.state
             new_state = terminal.state
 
         if new_state != record.state:
@@ -197,8 +206,11 @@ class JobReconciler:
         scheduler_job_id: str,
         record: JobRecord,
         fallback_state: JobState | None = None,
-    ) -> TerminalStatus:
-        """Determine terminal state for a disappeared job.
+    ) -> TerminalStatus | None:
+        """Confirm terminal state for a job missing from ``poll_many``.
+
+        Returns ``None`` when accounting also has no verdict so the caller
+        keeps the current (non-terminal) state instead of inventing ``LOST``.
 
         Takes the caller's *record* rather than re-reading it: this runs once
         per disappeared job per cycle.
@@ -234,15 +246,16 @@ class JobReconciler:
         )
         if result is not None:
             return result
-
-        return TerminalStatus(
-            state=fallback_state or JobState.LOST,
-            failure_reason=(
-                "job disappeared from scheduler"
-                if fallback_state in (None, JobState.LOST)
-                else None
-            ),
-        )
+        if fallback_state is not None:
+            return TerminalStatus(
+                state=fallback_state,
+                failure_reason=(
+                    "job disappeared from scheduler"
+                    if fallback_state == JobState.LOST
+                    else None
+                ),
+            )
+        return None
 
     def _apply_transition(
         self,

@@ -53,8 +53,21 @@ class ExponentialBackoffStrategy:
         self._initial = initial
         self._maximum = maximum
         self._factor = factor
+        # Polls after which the interval is capped at `maximum`. Clamping the
+        # exponent keeps ``factor ** poll_count`` from overflowing for jobs that
+        # run many hours (default backoff saturates after ~11 polls).
+        if factor > 1.0:
+            import math
+
+            self._saturate_at = math.ceil(
+                math.log(maximum / initial) / math.log(factor)
+            )
+        else:
+            self._saturate_at = float("inf")
 
     def next_interval(self, elapsed: float, poll_count: int) -> float:
+        if poll_count >= self._saturate_at:
+            return self._maximum
         return min(self._initial * (self._factor**poll_count), self._maximum)
 
 
