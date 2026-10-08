@@ -44,10 +44,10 @@ pull request inside a fork is skipped (its push already ran the full tier).
 
 | workflow | fast tier (feature branch on MolCrafts) | full tier (fork pushes, dev/master/main, PRs, tags) | MolCrafts only |
 |---|---|---|---|
-| `lint.yml` | `lint / hooks` (pre-commit stage, all files) | same | — |
+| `lint.yml` | `lint / hooks` (pre-commit stage, all files), `lint / workflows` (MolCrafts/molcrafts-ci/actions/check-workflows) | same | — |
 | `test.yml` | `test / context`, `test / python (ubuntu-latest, 3.12)`, `test / package` | `test / context`, `test / python ({ubuntu,macos}-latest, {3.12,3.13})`, `test / package` | — |
 | `docs.yml` | `docs / build` (`zensical build --strict`) | same | deploy: Cloudflare Pages, outside Actions |
-| `release.yml` | — | — | `v*` tag: lint + test + `release / build` + `release / pypi`; `workflow_dispatch` = dry run (no upload) |
+| `release.yml` | — | — | `v*` tag: lint + test + `release / build` + `release / pypi` (only a `v*` tag on MolCrafts: `publish`); `workflow_dispatch` = dry run (no upload) |
 
 The `protect-master` ruleset on `master` requires a pull request, blocks force
 pushes and deletion, and requires `test / context` and the full-tier `lint /`, `test /` and `docs /` checks.
