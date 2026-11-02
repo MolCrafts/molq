@@ -84,6 +84,7 @@ def test_cluster_path_io_goes_through_files_rpc(tmp_path):
 def test_path_transfer_makes_destination_a_copy(tmp_path):
     if shutil.which("rsync") is None:
         pytest.skip("rsync is not installed")
+    (tmp_path / "scratch").mkdir()
     source = tmp_path / "project"
     (source / "build").mkdir(parents=True)
     (source / "input.xyz").write_text("2\n")

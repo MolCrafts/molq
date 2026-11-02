@@ -17,7 +17,7 @@ jobs:
   context:
     permissions:
       contents: read
-    name: release / context
+    name: release
     uses: MolCrafts/molcrafts-ci/.github/workflows/context.yml@master
 
   verify:

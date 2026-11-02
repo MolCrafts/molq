@@ -1,6 +1,6 @@
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ !contains(fromJSON('["refs/heads/dev","refs/heads/master","refs/heads/main"]'), github.ref) && !startsWith(github.ref, 'refs/tags/') }}
+  cancel-in-progress: ${{ !contains(fromJSON('["refs/heads/dev","refs/heads/master"]'), github.ref) && !startsWith(github.ref, 'refs/tags/') }}
 name: ci
 
 'on':
@@ -11,7 +11,6 @@ name: ci
     branches:
     - dev
     - master
-    - main
   workflow_call: null
 
 env:
@@ -22,7 +21,7 @@ jobs:
   context:
     permissions:
       contents: read
-    name: ci / context
+    name: ci
     uses: MolCrafts/molcrafts-ci/.github/workflows/context.yml@master
 
   docs:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 
 from molq.client.binary import executable
@@ -14,6 +15,8 @@ def main() -> None:
     """Replace this process with the serve binary."""
     try:
         binary = executable()
+        if os.name == "nt":
+            raise SystemExit(subprocess.call([binary, *sys.argv[1:]]))
         os.execv(binary, [binary, *sys.argv[1:]])
     except (MolqError, OSError) as cause:
         exc = (

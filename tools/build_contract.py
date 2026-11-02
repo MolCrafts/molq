@@ -497,22 +497,48 @@ params = {
 for _name, _schema in params.items():
     if _name.startswith("files.") and _name != "files.transfer":
         _schema["properties"]["root"] = file_path
-params["files.list"]["properties"].update({
-    "with_stat": {"type": "boolean"},
-    "limit": {"type": "integer", "minimum": 1, "maximum": 512},
-    "after": string,
-})
+params["files.list"]["properties"].update(
+    {
+        "with_stat": {"type": "boolean"},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 512},
+        "after": string,
+    }
+)
 params["files.remove"]["properties"]["recursive"] = {"type": "boolean"}
-params["files.chmod"] = obj({"cluster": string, "path": file_path, "root": file_path, "mode": {"type": "integer", "minimum": 0, "maximum": 4095}}, ["cluster", "path", "mode"])
-params["files.symlink"] = obj({"cluster": string, "path": file_path, "root": file_path, "target": file_path}, ["cluster", "path", "target"])
-params["files.resolve"] = obj({"cluster": string, "path": file_path, "root": file_path}, ["cluster", "path"])
-params["files.read_many"] = obj({
-    "cluster": string, "root": file_path,
-    "paths": {"type": "array", "items": file_path, "minItems": 1, "maxItems": 128},
-    "max_bytes": {"type": "integer", "minimum": 1, "maximum": 262144},
-}, ["cluster", "paths"])
-params["connections.authenticate"] = obj({"cluster": string, "code": {"type": "string", "minLength": 1, "maxLength": 4096}}, ["cluster", "code"])
-params["files.transfer"]["properties"]["timeout_seconds"] = {"type": "integer", "minimum": 1, "maximum": 3600}
+params["files.chmod"] = obj(
+    {
+        "cluster": string,
+        "path": file_path,
+        "root": file_path,
+        "mode": {"type": "integer", "minimum": 0, "maximum": 4095},
+    },
+    ["cluster", "path", "mode"],
+)
+params["files.symlink"] = obj(
+    {"cluster": string, "path": file_path, "root": file_path, "target": file_path},
+    ["cluster", "path", "target"],
+)
+params["files.resolve"] = obj(
+    {"cluster": string, "path": file_path, "root": file_path}, ["cluster", "path"]
+)
+params["files.read_many"] = obj(
+    {
+        "cluster": string,
+        "root": file_path,
+        "paths": {"type": "array", "items": file_path, "minItems": 1, "maxItems": 128},
+        "max_bytes": {"type": "integer", "minimum": 1, "maximum": 262144},
+    },
+    ["cluster", "paths"],
+)
+params["connections.authenticate"] = obj(
+    {"cluster": string, "code": {"type": "string", "minLength": 1, "maxLength": 4096}},
+    ["cluster", "code"],
+)
+params["files.transfer"]["properties"]["timeout_seconds"] = {
+    "type": "integer",
+    "minimum": 1,
+    "maximum": 3600,
+}
 defs["FileLocation"]["properties"]["root"] = file_path
 
 contract = {

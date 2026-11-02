@@ -95,7 +95,8 @@ def test_sync_stdio_accepts_a_maximum_frame():
     peer = f"""
 import json, sys
 request = json.loads(sys.stdin.readline())
-print(json.dumps({{"jsonrpc": "2.0", "id": request["id"], "result": "a" * {MAX_FRAME - len(base)}}}), flush=True)
+sys.stdout.buffer.write(json.dumps({{"jsonrpc": "2.0", "id": request["id"], "result": "a" * {MAX_FRAME - len(base)}}}).encode() + bytes([10]))
+sys.stdout.buffer.flush()
 """
     wire = Wire(timeout=2)
     wire.hello = {"registry_id": "fixture"}
@@ -116,7 +117,8 @@ def test_async_stdio_accepts_a_maximum_frame():
         peer = f"""
 import json, sys
 request = json.loads(sys.stdin.readline())
-print(json.dumps({{"jsonrpc": "2.0", "id": request["id"], "result": "a" * {MAX_FRAME - len(base)}}}), flush=True)
+sys.stdout.buffer.write(json.dumps({{"jsonrpc": "2.0", "id": request["id"], "result": "a" * {MAX_FRAME - len(base)}}}).encode() + bytes([10]))
+sys.stdout.buffer.flush()
 """
         wire = AsyncWire(timeout=2)
         wire.hello = {"registry_id": "fixture"}
