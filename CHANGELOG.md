@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Slurm maps `after_started` to the native `after` dependency, which waits until the named allocation has begun.
+
 Breaking: Cluster definitions drop `target_root`. Every job directory is `~/.molcrafts/molq/jobs/<id>` under the target login's home; re-register Clusters without the field. SSH Clusters keep no molq files after a job ends. The first observation of a confirmed terminal state moves the job directory (script, stdout, stderr, receipts and files written to the default working directory) to `collected/<cluster-id>/` next to the registry and removes it from the target; `logs.read` and Shell receipts then use the local copy. SSH `files.transfer` now passes the transport's rsh before the operand separator, so remote copies no longer fail.
 
 `files.transfer` is the only file copy, in rsync syntax: `molq transfer [OPTION...] SRC... DEST` with `CLUSTER:PATH` operands. Options pass to rsync unchanged and nothing is implied, so `-a`/`--delete` are written by the caller; transport-owned options (`-e`, `--rsync-path`, `-M`, daemon) are rejected. The wire takes `sources`, `destination` and `options`; the result carries rsync's `output`.

@@ -53,7 +53,7 @@ molq clusters get hpc
 | Scheduler | Supported representation | Limits in 0.9.0 |
 |---|---|---|
 | `shell` | Detached commands and target receipts | No formal batch resources or queue policies |
-| `slurm` | Nodes, tasks, CPU budgets, memory, time, GPUs, MPS, dependencies, native steps | One accelerator request; no `after_started` dependency |
+| `slurm` | Nodes, tasks, CPU budgets, memory, time, GPUs, MPS, dependencies, native steps | One accelerator request |
 | `pbs` | OpenPBS JSON/select dialect, even task layout, per-node memory/GPU, time, dependencies | Set `pbs_dialect="openpbs"`; no QoS, reservation, exclusive, model, or MPS mapping |
 | `lsf` | Single node, one CPU per task, time, common scheduling and dependencies | Other layouts, memory, GPU, and MPS requests are rejected |
 
@@ -69,6 +69,7 @@ Read the definition and its `revision`, then pass a complete replacement to
 `cluster.update(definition, expected_revision=revision)`. CLI equivalents use
 `--definition` and `--revision`.
 
-Rename preserves the cluster ID. Changing its scheduler, transport, or target
-root requires a new cluster. Removing a definition leaves native jobs running;
-keep the definition if you need to query those jobs later.
+Rename preserves the cluster ID. Changing its scheduler or transport requires a
+new cluster. Every job directory is `~/.molcrafts/molq/jobs/<id>` on the target
+login. Removing a definition leaves native jobs running; keep the definition if
+you need to query those jobs later.

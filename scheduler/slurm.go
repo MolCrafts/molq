@@ -17,7 +17,7 @@ var slurmStates = map[string]string{
 	"TIMEOUT": "timed_out", "DEADLINE": "timed_out",
 }
 
-var slurmDependencies = map[string]string{"after": "afterany", "after_success": "afterok", "after_failure": "afternotok"}
+var slurmDependencies = map[string]string{"after": "afterany", "after_success": "afterok", "after_failure": "afternotok", "after_started": "after"}
 
 // Slurm maps one allocation onto sbatch, squeue, sacct and scancel.
 type Slurm struct{ core }

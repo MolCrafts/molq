@@ -137,6 +137,16 @@ func TestSlurmRenderResources(t *testing.T) {
 	}
 }
 
+func TestSlurmAfterStarted(t *testing.T) {
+	spec := specWith(nil, map[string]any{
+		"dependencies": []any{map[string]any{"condition": "after_started", "ref": map[string]any{"native_id": "42"}}},
+	}, nil)
+	scriptText, err := NewSlurm(script(), map[string]any{}).Render(spec, "/target")
+	if err != nil || !strings.Contains(scriptText, "--dependency=after:42") {
+		t.Fatalf("err=%v script=%s", err, scriptText)
+	}
+}
+
 func TestSlurmGPUModel(t *testing.T) {
 	spec := specWith(map[string]any{"accelerators": []any{map[string]any{"kind": "gpu", "quantity": 2, "scope": "total", "model": "a100"}}}, nil, nil)
 	scriptText, err := NewSlurm(script(), map[string]any{}).Render(spec, "/target")
