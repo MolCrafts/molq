@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"github.com/MolCrafts/molq/protocol"
@@ -67,5 +68,10 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Only a listening process outlives one command, so only it purges on a
+	// timer; a temporary stdio service purges when jobs.purge asks.
+	retention, stop := context.WithCancel(context.Background())
+	defer stop()
+	go service.RetainJobDirectories(retention, serve.PurgeInterval)
 	return http.ListenAndServe(net.JoinHostPort(listenHost, fmt.Sprint(listenPort)), handler)
 }

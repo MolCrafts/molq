@@ -13,6 +13,7 @@ import (
 
 // loopbackSSH puts an ssh on PATH that runs the remote command locally, the
 // way OpenSSH hands it to the login shell, for both molq and rsync callers.
+// The alias "unreachable" fails the way an unresolvable host does.
 func loopbackSSH(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -31,6 +32,10 @@ while [ $# -gt 0 ]; do
     *) break ;;
   esac
 done
+if [ "$1" = unreachable ]; then
+  echo "ssh: Could not resolve hostname unreachable" >&2
+  exit 255
+fi
 shift
 exec sh -c "$*"
 `

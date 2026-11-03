@@ -54,7 +54,7 @@ CI 用依赖规则禁止 clients/Observer import runtime services、scheduler、
 | 模式 | 调用路径 | 生命周期 |
 |---|---|---|
 | 本机无常驻程序 | native client → stdio RPC → 临时同一 runtime | 命令/Molq session结束后退出 |
-| 本机共享入口 | clients → loopback HTTP/WS → 同一 runtime | 长期API服务；不自行周期扫描 Cluster |
+| 本机共享入口 | clients → loopback HTTP/WS → 同一 runtime | 长期API服务；不自行周期扫描 Cluster 状态，只在启动时和每 24 小时按 `job_retention_days` 清理作业目录 |
 | HPC login node | clients → RPC → runtime → LocalTransport → native scheduler | 本机用户/原生 scheduler 身份；DB选实际本地磁盘 |
 | 独立管理节点 | clients → HTTPS/WSS → runtime → OpenSSH → native scheduler | SSH配置、凭据与alias属于runtime host |
 
@@ -76,8 +76,8 @@ Runtime停止不关闭用户的SSH master，也不终止已被原生 scheduler �
 | 身份 | runtime认证与RequestContext，所有 registry/cache/Scheduler 操作先授权；首发一个OS/HPC身份对应一个runtime实例 |
 | 兼容 | 1.0 之前无独立协议版本号，不提供向后兼容；opaque native IDs为string，时间RFC3339，memory_bytes十进制string |
 | Mutations | 必须request id/结果或outcome unknown；JSON-RPC batch不等于事务，get_many/cancel_many逐项result/error |
-| 核心方法 | clusters list/get/register/update/remove；jobs validate/submit/get/get_many/list/history/cancel/cancel_many/observe；events subscribe；logs read；config/presets读写；schema/discover |
-| 文件能力 | `files.transfer` 是唯一的文件复制：runtime 执行一次系统 rsync，参数是调用方给出的 rsync 选项（不隐含 `-a`/`--delete`），操作数是 `{cluster?, path}`；无 cluster 即 serve 主机上的绝对路径，`CLUSTER:相对路径` 相对登录 home。`-e/--rsh`、`--rsync-path`、`-M/--remote-option` 与 daemon 选项归 Transport 所有并被拒绝；两端都远程时报错。`files.stat/list/read/write/mkdir/remove/rename/touch` 是单路径有界操作，SSH 与本地都用位置参数的 POSIX sh 脚本，前置条件失败以 `reason` 返回且 outcome 为 not_applied。`logs.read` 只读作业 stdout/stderr。每次提交的作业目录固定为目标登录 home 下 `~/.molcrafts/molq/jobs/<32位hex>/`，只放作业脚本、stdout/stderr 和回执，也是默认工作目录；Cluster 不配置作业根。SSH home 每个 alias 解析一次。SSH Cluster 的作业目录只在运行期存在于目标端：serve 首次观察到原生确认的终态时（query/wait/watch/logs），以一次 rsync `--remove-source-files` 移到 serve 主机 registry 旁的 `collected/<cluster_id>/<目录名>/`，再删除目标端空目录；中断可在下次观察续传，失败保留远端并经 stderr 报告，不改变观察结果。已收回作业的日志读本地副本；Shell 回执在本地副本中继续作为原始执行证据。 |
+| 核心方法 | clusters list/get/register/update/remove；jobs validate/submit/get/get_many/list/history/cancel/cancel_many/observe/purge；events subscribe；logs read；config/presets读写；schema/discover |
+| 文件能力 | `files.transfer` 是唯一的文件复制：runtime 执行一次系统 rsync，参数是调用方给出的 rsync 选项（不隐含 `-a`/`--delete`），操作数是 `{cluster?, path}`；无 cluster 即 serve 主机上的绝对路径，`CLUSTER:相对路径` 相对登录 home。`-e/--rsh`、`--rsync-path`、`-M/--remote-option` 与 daemon 选项归 Transport 所有并被拒绝；两端都远程时报错。`files.stat/list/read/write/mkdir/remove/rename/touch` 是单路径有界操作，SSH 与本地都用位置参数的 POSIX sh 脚本，前置条件失败以 `reason` 返回且 outcome 为 not_applied。`logs.read` 只读作业 stdout/stderr。每次提交的作业目录固定为目标登录 home 下 `~/.molcrafts/molq/jobs/<32位hex>/`，只放作业脚本、stdout/stderr 和回执，也是默认工作目录；Cluster 不配置作业根。SSH home 每个 alias 解析一次。SSH Cluster 的作业目录只在运行期存在于目标端：serve 首次观察到原生确认的终态时（query/wait/watch/logs），以一次 rsync `--remove-source-files` 移到 serve 主机 registry 旁的 `collected/<cluster_id>/<目录名>/`，再删除目标端空目录；中断可在下次观察续传，失败保留远端并经 stderr 报告，不改变观察结果。已收回作业的日志读本地副本；Shell 回执在本地副本中继续作为原始执行证据。目标端与 `collected/` 中的作业目录（仅 32 位 hex 名称）在其自身及直接子项最后修改超过 `settings.job_retention_days`（默认 30，0 关闭）天后直接 rm -rf，不归档；`jobs.purge` 按需执行，每个目标/归档单独报告，不可达 Cluster 不影响其余。 |
 
 `jobs.validate` 只验证 schema 内部一致性及所选 Scheduler 能否准确表示，可返回规范化 Spec 和诊断；`jobs.preview` 如提供，必须使用同一 Scheduler renderer。校验不探测资源、队列、权限或 MPI/MPS 环境，也不保证原生调度器会接受。提交时重新校验并捕获配置 revision。
 Python提供Molq/Cluster/Job/JobCollection，同步/async façades同语义。submit(name, type=None, **connection/definition) 返回 RPC-only Cluster 装饰器；asubmit 对应 async 入口。显式绑定通过 RPC 注册或验证已有目的地；仅指定名字不注册。Cluster 可直接装饰同步函数：普通函数保留返回值、不提交；generator 每次 yield JobSpec 经公共 jobs.submit RPC 提交，并收到 Job，保留 generator 的 return。装饰本身不连接服务，不序列化 Python 函数到目标，不自动 wait/retry，也没有私有 workflow 状态。AsyncCluster 的装饰结果是可 await 的函数，提交仍经同一 RPC；builder 仍为同步函数/generator。连接由 Cluster.close / AsyncCluster.close 或 Molq.close / AsyncMolq.close 显式释放，context manager 是可选语法。示意：

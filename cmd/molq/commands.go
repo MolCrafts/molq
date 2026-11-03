@@ -104,8 +104,17 @@ func dispatchCommand(client *caller, command string, flags map[string][]string, 
 		return client.Call("jobs.observe", params)
 	case "history":
 		return historyCommand(client, positionals, flags)
+	case "purge":
+		if len(positionals) > 1 {
+			return nil, protocol.Fail("INVALID_INPUT", "usage: molq purge [CLUSTER]", nil)
+		}
+		params := map[string]any{}
+		if len(positionals) == 1 {
+			params["cluster"] = positionals[0]
+		}
+		return client.Call("jobs.purge", params)
 	default:
-		return nil, protocol.Fail("INVALID_INPUT", "usage: molq serve|rpc|watch|discover|clusters|submit|transfer|status|cancel|logs|wait|list|observe|history", nil)
+		return nil, protocol.Fail("INVALID_INPUT", "usage: molq serve|rpc|watch|discover|clusters|submit|transfer|status|cancel|logs|wait|list|observe|history|purge", nil)
 	}
 }
 

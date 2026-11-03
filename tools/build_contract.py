@@ -417,6 +417,7 @@ params = {
     },
     "jobs.cancel": obj({"ref": ref("JobRef"), "request_key": identifier}, ["ref"]),
     "jobs.cancel_many": obj({"refs": query["refs"]}, ["refs"]),
+    "jobs.purge": obj({"cluster": string}),
     "logs.read": obj(
         {
             "ref": ref("JobRef"),

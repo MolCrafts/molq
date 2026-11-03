@@ -22,6 +22,7 @@ var mutations = map[string]bool{
 	"jobs.submit":       true,
 	"jobs.cancel":       true,
 	"jobs.cancel_many":  true,
+	"jobs.purge":        true,
 	"files.transfer":    true,
 	"files.write":       true,
 	"files.mkdir":       true,

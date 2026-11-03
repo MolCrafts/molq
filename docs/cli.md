@@ -49,12 +49,15 @@ molq history hpc --state failed --limit 100
 molq history hpc --refs @refs.json
 molq observe hpc
 molq watch --cluster hpc --interval 5
+molq purge hpc
 ```
 
 `--state` is repeatable. Slurm range history accepts `--since` and `--until` as
 RFC3339 timestamps and filters completion time in `[since, until)`; the default
 window is 24 hours. `--refs` takes a JSON array and excludes range filters.
 See [monitoring](monitoring.md) for coverage and cursor semantics.
+`purge [CLUSTER]` deletes job directories older than `job_retention_days`; see
+[retention](configuration.md#job-directory-retention).
 
 ## Destinations and diagnostics
 

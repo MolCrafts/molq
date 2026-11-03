@@ -430,6 +430,12 @@ class JobsCancel_ManyParams(TypedDict):
     refs: list[JobRef]
 
 
+class JobsPurgeParams(TypedDict):
+    """Canonical wire shape."""
+
+    cluster: NotRequired[str]
+
+
 class LogsReadParams(TypedDict):
     """Canonical wire shape."""
 

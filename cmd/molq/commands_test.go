@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSubmitEcho(t *testing.T) {
@@ -79,5 +80,41 @@ func TestTransferTakesRsyncSyntax(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(destination, "skip.txt")); !os.IsNotExist(err) {
 		t.Fatalf("excluded skip.txt err = %v", err)
+	}
+}
+
+func TestPurgeDeletesOldJobDirectories(t *testing.T) {
+	binary, err := clientExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	registry := filepath.Join(root, "registry.db")
+	register := exec.Command(binary, "--registry", registry, "clusters", "register", "--definition", `{"name":"local","scheduler":"shell"}`)
+	if output, err := register.CombinedOutput(); err != nil {
+		t.Fatalf("register: %v\n%s", err, output)
+	}
+	const identity = "0846919e53ac493dab3608a4ce409be7"
+	directory := filepath.Join(root, "home", ".molcrafts", "molq", "jobs", identity)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-40 * 24 * time.Hour)
+	if err := os.Chtimes(directory, old, old); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(binary, "--registry", registry, "purge", "local").CombinedOutput()
+	if err != nil {
+		t.Fatalf("purge: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), `"removed":["`+identity+`"]`) {
+		t.Fatalf("purge output = %s", output)
+	}
+	if _, err := os.Stat(directory); !os.IsNotExist(err) {
+		t.Fatalf("old job directory kept: %v", err)
+	}
+	if output, err := exec.Command(binary, "--registry", registry, "purge", "a", "b").CombinedOutput(); err == nil {
+		t.Fatalf("purge with two clusters succeeded: %s", output)
 	}
 }

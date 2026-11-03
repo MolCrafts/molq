@@ -4,6 +4,8 @@ Each submission gets one job directory, `~/.molcrafts/molq/jobs/<directory>/` un
 
 On an SSH cluster that job directory exists only while the job runs. The first time serve observes a confirmed terminal state (a status query, `wait`, `watch` or `logs`), it moves the directory to the serve host with one rsync, at `collected/<cluster-id>/<directory>/` next to the registry (by default `~/.molcrafts/molq/collected/`), and removes it from the target. rsync deletes each remote file only after copying it, so an interrupted move keeps every file on one side and resumes at the next observation; a failure leaves the remote copy in place and is reported on serve's stderr. Logs of a collected job are read from the local copy. Files a job writes into its own job directory, which is its default working directory, move with it; anything that must stay on the cluster belongs in an explicit execution `cwd` elsewhere.
 
+Job directories on targets and in `collected/` are deleted, not archived, once unchanged for `job_retention_days` (30 by default); see [retention](configuration.md#job-directory-retention).
+
 ## Read job output
 
 ```python

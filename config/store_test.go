@@ -119,3 +119,27 @@ func TestBusyStorePreservesSettings(t *testing.T) {
 		t.Fatal("busy mutation changed settings")
 	}
 }
+
+func TestJobRetentionDaysAcceptsZeroAndRejectsFractions(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.RetentionDays(30); got != 30 {
+		t.Fatalf("default retention = %d", got)
+	}
+	if _, err := store.Set("settings", "job_retention_days", 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.RetentionDays(30); got != 0 {
+		t.Fatalf("disabled retention = %d", got)
+	}
+	for _, value := range []any{-1, 1.5, "30", 36501} {
+		if _, err := store.Set("settings", "job_retention_days", value); err == nil {
+			t.Fatalf("accepted retention %#v", value)
+		}
+	}
+	if got := store.RetentionDays(30); got != 0 {
+		t.Fatalf("rejected value changed retention to %d", got)
+	}
+}

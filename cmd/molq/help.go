@@ -34,6 +34,7 @@ Jobs:
   molq cancel --ref JSON
   molq logs --ref JSON
   molq wait --ref JSON
+  molq purge [CLUSTER]
 
 Process:
   molq serve           Listen for clients. Add --stdio for one local client
@@ -113,6 +114,12 @@ var commandHelp = map[string]string{
 	"wait": `molq wait --ref JSON [--timeout SECONDS] [--interval SECONDS]
   Poll until the job is confirmed finished or the timeout expires.
   The job keeps running if this command stops.`,
+	"purge": `molq purge [CLUSTER]
+  Delete job directories whose newest change is older than the
+  job_retention_days setting (default 30; 0 disables), on each cluster target
+  and in the serve host's collected/ archive. Deleted outright, not archived.
+  A listening serve process also does this at start and every 24 hours.
+  An unreachable cluster is reported in its result and does not stop the rest.`,
 	"rpc": `molq rpc METHOD [--params JSON]
   Call one public method. --params is a JSON object, @file, or @- for stdin.
   Method names and fields come from molq discover.`,

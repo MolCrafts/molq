@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {StdioWire} from '../dist/node.js';
-import {MolqError} from '../dist/wire.js';
+import {MolqError,isMutation} from '../dist/wire.js';
 
 test('stdio preserves an id:null startup error', async () => {
   const data = {kind:'STATE_SCHEMA_INCOMPATIBLE',message:'Unsupported registry',outcome:'not_applied',context:{}};
@@ -117,4 +117,8 @@ test('connection options are validated before dispatch or local fallback',async(
   for(const token of [null,42,{},'header\nvalue','header\0value']) assert.throws(()=>new HttpWire('http://localhost',token),error=>error.kind==='INVALID_INPUT');
   assert.equal(new HttpWire('https://localhost',undefined).token,'');
   for(const registryId of ['',null,42]) assert.throws(()=>new Molq({call:async()=>{},close:async()=>{}},registryId),error=>error.kind==='INVALID_INPUT');
+});
+
+test('job directory purge is a mutation', () => {
+  assert.equal(isMutation('jobs.purge'), true);
 });

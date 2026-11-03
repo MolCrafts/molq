@@ -146,3 +146,13 @@ The scheduler must support the requested condition exactly; see [mappings](sched
 Save `job.ref` after submission. If a mutation returns `OUTCOME_UNKNOWN`, inspect
 native state before submitting again. A `request_key` deduplicates only within
 the same service for a bounded interval; it does not survive a restart.
+
+## Job directory retention
+
+Each submission's job directory (`~/.molcrafts/molq/jobs/<id>/` on the target,
+or its collected copy under `collected/` on the serve host) is deleted outright
+once nothing in it has changed for `job_retention_days`, 30 days by default.
+Its script, logs and receipts go with it, and so do files the job wrote into its
+default working directory; set an explicit execution `cwd` for results you want
+to keep. See [retention](configuration.md#job-directory-retention) to change or
+disable the window and to purge on demand.

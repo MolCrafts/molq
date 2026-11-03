@@ -97,6 +97,8 @@ func (s *Service) dispatch(method string, params map[string]any) (any, error) {
 		return s.query(ctx, method, params)
 	case "jobs.cancel", "jobs.cancel_many":
 		return s.cancel(ctx, method, params)
+	case "jobs.purge":
+		return s.purge(ctx, stringField(params["cluster"]))
 	case "logs.read":
 		return s.logs(ctx, params)
 	case "connections.authenticate":

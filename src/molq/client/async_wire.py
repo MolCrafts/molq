@@ -84,6 +84,7 @@ class AsyncWire:
             "jobs.submit",
             "jobs.cancel",
             "jobs.cancel_many",
+            "jobs.purge",
             "files.transfer",
             "files.write",
             "files.mkdir",

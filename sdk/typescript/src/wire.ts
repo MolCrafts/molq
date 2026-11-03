@@ -1,7 +1,7 @@
 /** Wire framing only: no default merging, resource mapping or state machine. */
 import type { ErrorData } from "./types.js";
 export type { ErrorData } from "./types.js";
-const mutations = new Set(["clusters.register", "clusters.update", "clusters.remove", "config.set", "config.reload", "presets.set", "jobs.submit", "jobs.cancel", "jobs.cancel_many", "files.transfer", "files.write", "files.mkdir", "files.remove", "files.rename", "files.touch"]);
+const mutations = new Set(["clusters.register", "clusters.update", "clusters.remove", "config.set", "config.reload", "presets.set", "jobs.submit", "jobs.cancel", "jobs.cancel_many", "jobs.purge", "files.transfer", "files.write", "files.mkdir", "files.remove", "files.rename", "files.touch"]);
 export function isMutation(method: string): boolean { return mutations.has(method); }
 export function invalidInput(message: string): MolqError { return new MolqError({ kind: "INVALID_INPUT", message, outcome: "not_applied", context: {} }); }
 /** Encode strict JSON values; optional undefined object properties are omitted. */

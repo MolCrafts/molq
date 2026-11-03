@@ -265,7 +265,7 @@ func connectionError(mutation bool) error {
 
 func isMutation(method string) bool {
 	switch method {
-	case "clusters.register", "clusters.update", "clusters.remove", "config.set", "config.reload", "presets.set", "jobs.submit", "jobs.cancel", "jobs.cancel_many", "files.transfer", "files.write", "files.mkdir", "files.remove", "files.rename", "files.touch":
+	case "clusters.register", "clusters.update", "clusters.remove", "config.set", "config.reload", "presets.set", "jobs.submit", "jobs.cancel", "jobs.cancel_many", "jobs.purge", "files.transfer", "files.write", "files.mkdir", "files.remove", "files.rename", "files.touch":
 		return true
 	default:
 		return false

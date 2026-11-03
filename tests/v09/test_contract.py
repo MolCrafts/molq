@@ -90,3 +90,14 @@ def test_contract_and_runtime_have_no_independent_protocol_version(tmp_path):
         assert hello["release"] == "0.9.0"
         assert hello["registry_id"]
         assert not {"version", "protocol_version", "schema_version"} & hello.keys()
+
+
+def test_job_directory_purge_is_a_mutation_with_retention_report(tmp_path):
+    assert contract()["methods"]["jobs.purge"]["properties"].keys() == {"cluster"}
+    with Molq(registry=tmp_path / "registry.db") as mq:
+        mq.clusters.register(name="local", scheduler="shell")
+        report = mq.rpc("jobs.purge")
+    assert report["retention_days"] == 30
+    assert report["partial_failure"] is False
+    assert [r["location"] for r in report["results"]] == ["target"]
+    assert report["results"][0]["removed"] == []

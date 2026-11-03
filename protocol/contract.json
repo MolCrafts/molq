@@ -1274,6 +1274,18 @@
       ],
       "additionalProperties": false
     },
+    "jobs.purge": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
     "logs.read": {
       "type": "object",
       "properties": {
