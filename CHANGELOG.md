@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+SSH uses the alias's OpenSSH ControlPath when one is configured, so an existing ControlMaster is the connection. A private ControlPath remains the fallback. `AUTH_REQUIRED`, `TRANSPORT_UNAVAILABLE`, and `CONNECTION_TIMEOUT` from that connection stay those kinds, with the SSH diagnostic, instead of being rewritten as `SCHEDULER_UNAVAILABLE`.
+
 Slurm maps `after_started` to the native `after` dependency, which waits until the named allocation has begun.
 
 Job directories are deleted after a retention window. The new `job_retention_days` setting (default 30, `0` disables) deletes outright, without archiving, every job directory whose directory and immediate entries have not changed for that many days, on each registered cluster's `~/.molcrafts/molq/jobs/` and in the serve host's `collected/` archive. Only 32-digit job identity directories are touched. A listening `molq serve` purges at start and every 24 hours; `jobs.purge` and `molq purge [CLUSTER]` purge on demand and report each target and archive separately, so an unreachable cluster sets `partial_failure` without stopping the others.

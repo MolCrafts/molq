@@ -375,6 +375,6 @@ jobs.list 支持 canonical states 与 exact name。jobs.history 接受互斥的 
 - 文件操作可接收 `root`。根和路径在目标端解释，拒绝 `..`、根外路径和根外符号链接；创建不存在的叶子时校验物理父目录。rename/symlink 同时校验两端。传输还校验目录内部链接及链接指向的目录，防止 rsync 解引用越界。检查受目标端期限与集群并发约束；它是调用方操作约束，不是 molq 用户权限系统或对抗目标账号并发更换目录的操作系统沙箱。
 - `files.resolve/chmod/symlink` 补齐路径解析、权限与链接操作；`files.remove` 的 `recursive` 默认 false。文件及传输路径必须为单行字符串。
 - `files.transfer.timeout_seconds` 为 1–3600 秒，默认 90 秒。Python `Path.transfer(..., timeout=...)` 和 `Cluster.transfer(..., timeout=...)` 将期限交给服务；客户端连接期限需覆盖该操作。目录按内容复制，选项与排除规则仍由调用方显式给出。超时、断连或已派发但无法确认的写入保留 `OUTCOME_UNKNOWN`；客户端不重发。
-- `connections.authenticate` 及同步/异步/TypeScript `Cluster.authenticate(code)` 完成一次有界认证。验证码只存在于私有临时资源中，不进 argv、日志或持久配置，请求结束清理。认证与常规 SSH/rsync 共享 molq 私有 ControlPath，使用用户已有 alias、密钥和跳板配置，不关闭用户 master；密钥访问没有 master 存活前提。认证拒绝为 `AUTH_REQUIRED`、连接超时为 `CONNECTION_TIMEOUT`、不可达为 `TRANSPORT_UNAVAILABLE`。只支持一次响应，不提供密码管理或多轮交互。
+- `connections.authenticate` 及同步/异步/TypeScript `Cluster.authenticate(code)` 完成一次有界认证。验证码只存在于私有临时资源中，不进 argv、日志或持久配置，请求结束清理。别名已有 ControlPath 时，认证与常规 SSH/rsync 沿用该 OpenSSH master，不覆盖 ControlMaster/ControlPath。没有 ControlPath 时，二者共享 molq 私有 ControlPath。使用用户已有 alias、密钥和跳板配置，不关闭用户 master；密钥访问没有 master 存活前提。认证拒绝为 `AUTH_REQUIRED`、连接超时为 `CONNECTION_TIMEOUT`、不可达为 `TRANSPORT_UNAVAILABLE`。传输失败保持原 kind，不改写成 `SCHEDULER_UNAVAILABLE`。只支持一次响应，不提供密码管理或多轮交互。
 
 真实 Linux SSH/HPC、OTP 和规模性能验收独立于本地替身测试；本次仍保留待验收。

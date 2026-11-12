@@ -10,6 +10,46 @@ import (
 	"time"
 )
 
+func TestSSHCommandUsesConfiguredControlPath(t *testing.T) {
+	requirePOSIX(t)
+	dir := t.TempDir()
+	script := "#!/bin/sh\nif [ \"$1\" = \"-G\" ]; then printf 'hostname arrhenius\\ncontrolmaster auto\\ncontrolpath /tmp/user-socket\\n'; exit 0; fi\nprintf '%s\\n' \"$@\"\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	args, err := SSHCommand("Arrhenius")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "ControlPath=") || strings.Contains(joined, "ControlMaster=") {
+		t.Fatalf("overrode the user master: %v", args)
+	}
+	if !strings.Contains(joined, "BatchMode=yes") {
+		t.Fatalf("args = %v", args)
+	}
+}
+
+func TestRunReportsAuthenticationDiagnostic(t *testing.T) {
+	requirePOSIX(t)
+	dir := t.TempDir()
+	script := "#!/bin/sh\nif [ \"$1\" = \"-G\" ]; then exit 0; fi\necho 'Permission denied (keyboard-interactive).' >&2\nexit 255\n"
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	_, err := (SSH{Alias: "Arrhenius"}).Run(context.Background(), []string{"squeue", "--me"}, time.Second, nil, false)
+	failure, ok := err.(*protocol.Error)
+	if !ok || failure.Kind != "AUTH_REQUIRED" {
+		t.Fatalf("err=%v", err)
+	}
+	diagnostic, _ := failure.Context["diagnostic"].(string)
+	if !strings.Contains(diagnostic, "keyboard-interactive") {
+		t.Fatalf("diagnostic = %q", diagnostic)
+	}
+}
+
 func TestAuthenticateUsesPrivateHelperAndSharedConnection(t *testing.T) {
 	requirePOSIX(t)
 	dir := t.TempDir()
@@ -19,7 +59,7 @@ func TestAuthenticateUsesPrivateHelperAndSharedConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := filepath.Join(dir, "arguments")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '" + log + "'\nif [ -n \"$SSH_ASKPASS\" ]; then [ \"$(\"$SSH_ASKPASS\")\" = 123456 ] || { echo 'Permission denied (keyboard-interactive)' >&2; exit 255; }; fi\n"
+	script := "#!/bin/sh\nif [ \"$1\" = \"-G\" ]; then exit 0; fi\nprintf '%s\\n' \"$@\" >> '" + log + "'\nif [ -n \"$SSH_ASKPASS\" ]; then [ \"$(\"$SSH_ASKPASS\")\" = 123456 ] || { echo 'Permission denied (keyboard-interactive)' >&2; exit 255; }; fi\n"
 	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +101,7 @@ func TestAuthenticationTimeoutAndDisconnectedWrite(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TMPDIR", dir)
 	binary := filepath.Join(dir, "ssh")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nsleep 5\n"), 0700); err != nil {
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nif [ \"$1\" = \"-G\" ]; then exit 0; fi\nsleep 5\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -91,7 +131,7 @@ func TestAuthenticationPreservesBoundedDiagnosticWithoutResponse(t *testing.T) {
 	requirePOSIX(t)
 	dir := t.TempDir()
 	t.Setenv("TMPDIR", dir)
-	script := "#!/bin/sh\nresponse=$(\"$SSH_ASKPASS\")\nprintf 'unix_listener failed: %s\\n' \"$response\" >&2\nhead -c 4096 /dev/zero | tr '\\000' x >&2\nexit 255\n"
+	script := "#!/bin/sh\nif [ \"$1\" = \"-G\" ]; then exit 0; fi\nresponse=$(\"$SSH_ASKPASS\")\nprintf 'unix_listener failed: %s\\n' \"$response\" >&2\nhead -c 4096 /dev/zero | tr '\\000' x >&2\nexit 255\n"
 	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}

@@ -18,7 +18,9 @@ Cluster stores destination semantics only: ID/name, Scheduler/Transport binding,
 
 The serve process owns canonical snapshots/completion and scoped diff/events. `molq watch` chooses cadence, backoff and notification and uses RPC only. Notifications fail open. Subscriptions passively deliver already observed events.
 
-Use asynchronous bounded subprocesses and Cluster/batch concurrency. No permanent Job coroutine/timer/session. OpenSSH owns SSH configuration/multiplexing; invoke system ssh/rsync and never shut down user masters. No retry/workflow/MPS manager.
+Use asynchronous bounded subprocesses and Cluster/batch concurrency. No permanent Job coroutine/timer/session. OpenSSH owns SSH configuration/multiplexing; invoke system ssh/rsync and never shut down user masters. When an alias already has a ControlPath, use that master instead of a private one. No retry/workflow/MPS manager.
+
+For one-off submissions, pass argv, inline JSON or `--spec @-`. Put transient specs, scripts, and local test outputs in an OS temporary directory. For test builds and other temporary files needed on HPC compute nodes, use a shared scratch directory on the target and keep `~/work` for project files.
 
 ## Public model and wire contract
 

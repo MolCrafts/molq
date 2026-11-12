@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ type fakeTransport struct {
 	calls    [][]string
 	files    map[string][]byte
 	scripted []transport.Result
+	fail     error
 }
 
 func script(values ...any) *fakeTransport {
@@ -31,6 +33,11 @@ func script(values ...any) *fakeTransport {
 
 func (f *fakeTransport) Run(_ context.Context, argv []string, _ time.Duration, _ []byte, _ bool) (transport.Result, error) {
 	f.calls = append(f.calls, append([]string{}, argv...))
+	if f.fail != nil {
+		err := f.fail
+		f.fail = nil
+		return transport.Result{}, err
+	}
 	if len(f.scripted) == 0 {
 		return transport.Result{}, nil
 	}
@@ -104,6 +111,22 @@ func TestCancelNetworkFailureIsUnknown(t *testing.T) {
 	item, _ := err.(*protocol.Error)
 	if item == nil || item.Kind != "OUTCOME_UNKNOWN" || item.Outcome != "unknown" {
 		t.Fatalf("err=%#v", err)
+	}
+}
+
+func TestListKeepsAuthenticationFailure(t *testing.T) {
+	fake := script()
+	fake.fail = protocol.Fail("AUTH_REQUIRED", "SSH authentication was rejected", map[string]any{
+		"diagnostic": "Permission denied (keyboard-interactive).",
+		"dispatched": false,
+	})
+	_, err := NewSlurm(fake, map[string]any{}).List(context.Background())
+	item, _ := err.(*protocol.Error)
+	if item == nil || item.Kind != "AUTH_REQUIRED" {
+		t.Fatalf("err=%#v", err)
+	}
+	if item.Context["command"] != "squeue" || !strings.Contains(fmt.Sprint(item.Context["diagnostic"]), "keyboard-interactive") {
+		t.Fatalf("context=%v", item.Context)
 	}
 }
 

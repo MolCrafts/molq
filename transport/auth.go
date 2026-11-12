@@ -13,9 +13,14 @@ import (
 	"github.com/MolCrafts/molq/protocol"
 )
 
-// SSHCommand is also used by rsync: authentication and all later I/O must
-// address the same private master, without changing the user's SSH config.
+// SSHCommand is also used by rsync. An alias that already has a ControlPath
+// keeps that OpenSSH master; molq does not override it and does not close it.
+// Without one, authentication and later I/O share a private ControlPath.
 func SSHCommand(alias string) ([]string, error) {
+	args := []string{"ssh", "-T", "-o", "BatchMode=yes"}
+	if userControlsMultiplexing(alias) {
+		return args, nil
+	}
 	dir := filepath.Join(os.TempDir(), fmt.Sprintf("molq-ssh-%d", os.Getuid()))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -26,7 +31,28 @@ func SSHCommand(alias string) ([]string, error) {
 	}
 	digest := sha256.Sum256([]byte(alias))
 	socket := filepath.Join(dir, fmt.Sprintf("%x", digest[:12]))
-	return []string{"ssh", "-T", "-o", "BatchMode=yes", "-o", "ControlMaster=auto", "-o", "ControlPersist=600", "-o", "ControlPath=" + socket}, nil
+	return append(args, "-o", "ControlMaster=auto", "-o", "ControlPersist=600", "-o", "ControlPath="+socket), nil
+}
+
+// userControlsMultiplexing reports whether OpenSSH already has a ControlPath
+// for alias. A failed probe keeps the private master rather than failing the
+// operation before the real command runs.
+func userControlsMultiplexing(alias string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	result, err := (Local{}).Run(ctx, []string{"ssh", "-G", "--", alias}, 3*time.Second, nil, false)
+	if err != nil || result.ReturnCode != 0 {
+		return false
+	}
+	for _, line := range strings.Split(result.Text(), "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok || !strings.EqualFold(key, "controlpath") {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		return value != "" && !strings.EqualFold(value, "none")
+	}
+	return false
 }
 
 func (s SSH) Authenticate(ctx context.Context, code string) error {
@@ -80,8 +106,18 @@ func (s SSH) Authenticate(ctx context.Context, code string) error {
 
 func sshFailure(stderr []byte) *protocol.Error {
 	text := strings.ToLower(string(stderr))
+	var failure *protocol.Error
 	if strings.Contains(text, "permission denied") || strings.Contains(text, "authentication failed") || strings.Contains(text, "verification code") {
-		return protocol.Fail("AUTH_REQUIRED", "SSH authentication was rejected", nil)
+		failure = protocol.Fail("AUTH_REQUIRED", "SSH authentication was rejected", nil)
+	} else {
+		failure = protocol.Fail("TRANSPORT_UNAVAILABLE", "SSH connection failed", nil)
 	}
-	return protocol.Fail("TRANSPORT_UNAVAILABLE", "SSH connection failed", nil)
+	diagnostic := strings.TrimSpace(string(stderr))
+	if len(diagnostic) > 2048 {
+		diagnostic = diagnostic[:2048]
+	}
+	if diagnostic != "" {
+		failure.Context["diagnostic"] = strings.ToValidUTF8(diagnostic, "\uFFFD")
+	}
+	return failure
 }

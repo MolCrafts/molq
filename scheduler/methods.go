@@ -18,6 +18,25 @@ func unsupported(message string) error {
 	return protocol.Fail("SCHEDULER_UNSUPPORTED", message, nil)
 }
 
+func explainedTransport(kind string) bool {
+	switch kind {
+	case "AUTH_REQUIRED", "PERMISSION_DENIED", "TRANSPORT_UNAVAILABLE", "CONNECTION_TIMEOUT":
+		return true
+	default:
+		return false
+	}
+}
+
+func withCommand(item *protocol.Error, command string) *protocol.Error {
+	if item.Context == nil {
+		item.Context = map[string]any{}
+	}
+	if _, ok := item.Context["command"]; !ok {
+		item.Context["command"] = command
+	}
+	return item
+}
+
 func (c *core) native(ctx context.Context, argv []string, mutation bool, input []byte, hasInput bool) (string, error) {
 	result, err := c.transport.Run(ctx, argv, 30*time.Second, input, hasInput)
 	if err != nil {
@@ -28,10 +47,24 @@ func (c *core) native(ctx context.Context, argv []string, mutation bool, input [
 		if !mutation && item.Kind == "PARTIAL_FAILURE" {
 			return "", err
 		}
-		if mutation && item.Context["dispatched"] != false {
-			return "", protocol.FailOutcome("OUTCOME_UNKNOWN", "Native mutation outcome is unknown", "unknown", map[string]any{"command": argv[0]})
+		dispatched := item.Context["dispatched"] != false
+		// Authentication never ran the scheduler command. A dropped connection
+		// after dispatch still leaves a mutation outcome unknown.
+		if mutation && dispatched && item.Kind != "AUTH_REQUIRED" && item.Kind != "PERMISSION_DENIED" {
+			extra := map[string]any{"command": argv[0]}
+			if diagnostic, ok := item.Context["diagnostic"]; ok {
+				extra["diagnostic"] = diagnostic
+			}
+			return "", protocol.FailOutcome("OUTCOME_UNKNOWN", "Native mutation outcome is unknown", "unknown", extra)
 		}
-		return "", protocol.Fail("SCHEDULER_UNAVAILABLE", "Native scheduler operation unavailable", map[string]any{"command": argv[0]})
+		if explainedTransport(item.Kind) {
+			return "", withCommand(item, argv[0])
+		}
+		extra := map[string]any{"command": argv[0], "cause": item.Kind, "detail": item.Message}
+		if diagnostic, ok := item.Context["diagnostic"]; ok {
+			extra["diagnostic"] = diagnostic
+		}
+		return "", protocol.Fail("SCHEDULER_UNAVAILABLE", "Native scheduler operation unavailable", extra)
 	}
 	if result.ReturnCode != 0 {
 		kind := "SCHEDULER_UNAVAILABLE"

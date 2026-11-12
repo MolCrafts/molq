@@ -18,7 +18,9 @@ resources such as memory, CPU counts, or queue accounts require a batch schedule
 
 Set up an SSH alias in `~/.ssh/config` and confirm that you can connect without
 an interactive prompt. molq uses system OpenSSH in BatchMode; your SSH config
-owns authentication, jump hosts, and multiplexing.
+owns authentication, jump hosts, and multiplexing. If that alias already sets
+`ControlPath`, molq uses the master you opened and does not start a second one.
+A terminal login is shared only while that master is running (`ssh -O check ALIAS`).
 
 ```python
 from molq import submit

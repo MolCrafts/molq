@@ -87,8 +87,9 @@ def test_read_many_executes_one_target_command(tmp_path, monkeypatch):
 
     binary = tmp_path / "ssh"
     calls = tmp_path / "calls"
+    # `ssh -G` only evaluates local config; count commands that reach the target.
     binary.write_text(
-        f"#!/bin/sh\nprintf x >> '{calls}'\nfor arg do last=$arg; done\nexec sh -c \"$last\"\n".replace(
+        f'#!/bin/sh\n[ "$1" = -G ] && exit 0\nprintf x >> \'{calls}\'\nfor arg do last=$arg; done\nexec sh -c "$last"\n'.replace(
             '\\"', '"'
         )
     )
