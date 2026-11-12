@@ -67,7 +67,7 @@ func TestInvalidClusterDefinitionReturnsInputError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := exec.Command(binary, "clusters", "register", "--definition", "[]").CombinedOutput()
+	output, err := exec.Command(binary, "cluster", "register", "--definition", "[]").CombinedOutput()
 	if failure, ok := err.(*exec.ExitError); !ok || failure.ExitCode() != 2 {
 		t.Fatalf("err=%v output=%s", err, output)
 	}

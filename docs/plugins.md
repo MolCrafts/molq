@@ -9,7 +9,7 @@ molq watch --cluster hpc --once
 
 `watch` samples job state, prints changes as JSON, and backs off after failures.
 The first sample establishes a baseline; it does not replay historical
-completions. Use `molq history hpc` to inspect earlier jobs.
+completions. Use `molq job history hpc` to inspect earlier jobs.
 
 ## Defaults
 

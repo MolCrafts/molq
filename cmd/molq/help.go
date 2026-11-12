@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -9,32 +8,43 @@ import (
 
 const helpText = `molq submits, inspects, and cancels local or HPC jobs.
 
+A cluster is a registered destination. A job is one allocation on a cluster.
+The SSH host in ~/.ssh/config is how that cluster is reached. List those
+separately:
+
+  molq cluster list
+  molq job list CLUSTER
+
 Start with:
-  molq ping            Ask the selected serve process for one hello
-  molq health          Report ready or not, without explaining failures
-  molq doctor          Explain a failed check: path and error
   molq --help          Show this text
   molq <command> --help
                        Show one command
   molq discover        Print the public method catalog and schemas
+  molq ping            Ask the selected serve process for one hello
+  molq health          Report ready or not, without explaining failures
+  molq doctor          Explain a failed check: path and error
+
+Clusters:
+  molq cluster list
+  molq cluster get CLUSTER
+  molq cluster register --definition JSON
+  molq cluster update CLUSTER --definition JSON --revision N
+  molq cluster remove CLUSTER --revision N
 
 Jobs:
-  molq clusters list
-  molq clusters get CLUSTER
-  molq clusters register --definition JSON
-  molq clusters update CLUSTER --definition JSON --revision N
-  molq clusters remove CLUSTER --revision N
-  molq submit CLUSTER -- ARGV
-  molq submit CLUSTER --spec JSON
+  molq job submit CLUSTER -- ARGV
+  molq job submit CLUSTER --spec JSON
+  molq job list CLUSTER [--state STATE] [--name NAME]
+  molq job status --ref JSON
+  molq job history CLUSTER
+  molq job observe CLUSTER
+  molq job cancel --ref JSON
+  molq job logs --ref JSON
+  molq job wait --ref JSON
+  molq job purge [CLUSTER]
+
+Files:
   molq transfer [RSYNC_OPTION...] SRC... DEST
-  molq status --ref JSON
-  molq list CLUSTER
-  molq observe CLUSTER
-  molq history CLUSTER
-  molq cancel --ref JSON
-  molq logs --ref JSON
-  molq wait --ref JSON
-  molq purge [CLUSTER]
 
 Process:
   molq serve           Listen for clients. Add --stdio for one local client
@@ -46,11 +56,14 @@ Where data lives:
   --config PATH        JSON or YAML settings. Default file is optional
   --endpoint URL       Use a running serve process instead of a local registry
   --token TEXT         Bearer token for --endpoint
+  --json               Print the JSON object even when stdout is a terminal
+
+On a terminal, cluster list and job list print a table. A pipe, a redirect,
+or --json prints one JSON object. --help is this text. --version is JSON.
+watch prints one JSON-RPC notification or error per line. Exit codes are
+unchanged.
 
 JSON or @file values are the public request shapes from molq discover.
-Commands print JSON, including errors, help, version, and doctor.
-watch prints one JSON-RPC notification or error per line.
-
 --name and --comment apply only to argv submission. With --spec, put them in
 the spec. Give argv or --spec, not both. --ref is the JobRef, not the whole
 submit response. Cancellation acceptance is not proof the job has stopped.
@@ -71,21 +84,41 @@ var commandHelp = map[string]string{
   Exit 0 means every check passed. Nothing is submitted.`,
 	"discover": `molq discover
   Print the public method catalog, request schemas, and result types.`,
-	"clusters": `molq clusters list
-  molq clusters get CLUSTER
-  molq clusters register --definition JSON
-  molq clusters update CLUSTER --definition JSON --revision N
-  molq clusters remove CLUSTER --revision N
+	"cluster": `molq cluster list
+  molq cluster get CLUSTER
+  molq cluster register --definition JSON
+  molq cluster update CLUSTER --definition JSON --revision N
+  molq cluster remove CLUSTER --revision N
 
-  CLUSTER is a name or id. --definition is a cluster object, or @file.
-  update and remove require the revision you last read.`,
-	"submit": `molq submit CLUSTER -- ARGV
-  molq submit CLUSTER --spec JSON [--request-key KEY]
-  molq submit CLUSTER --name TEXT --comment TEXT -- ARGV
+  A cluster is a destination, not an SSH host. CLUSTER is a name or id.
+  --definition is a cluster object, or @file. update and remove require the
+  revision you last read. On a terminal, list prints a table; --json prints
+  the JSON object.`,
+	"job": `molq job submit CLUSTER -- ARGV
+  molq job submit CLUSTER --spec JSON [--request-key KEY]
+  molq job submit CLUSTER --name TEXT --comment TEXT -- ARGV
+  molq job list CLUSTER [--state STATE] [--name NAME]
+  molq job status --ref JSON [--consistency live|bounded|cached]
+  molq job history CLUSTER [--since TIME] [--until TIME] [--state STATE] [--name NAME] [--limit N]
+  molq job history CLUSTER --refs JSON
+  molq job observe CLUSTER [--cursor TOKEN]
+  molq job cancel --ref JSON [--request-key KEY]
+  molq job logs --ref JSON [--stream stdout|stderr] [--offset N] [--limit N]
+  molq job wait --ref JSON [--timeout SECONDS] [--interval SECONDS]
+  molq job purge [CLUSTER]
 
-  CLUSTER is a name or id. Use argv or --spec, not both.
-  --name and --comment are only for argv; a spec already carries scheduling.
-  --request-key repeats the same submit inside one serve process.`,
+  CLUSTER is a name or id. list shows jobs the scheduler currently knows.
+  --state may be repeated. On a terminal, list prints a table; --json prints
+  the JSON object. Use argv or --spec, not both. --name and --comment are
+  only for argv; a spec already carries scheduling. --request-key repeats the
+  same submit inside one serve process. --ref is a JobRef object, or @file.
+  History times are RFC3339 with a timezone. --refs cannot be combined with
+  range filters. wait polls until the job is confirmed finished or the timeout
+  expires; the job keeps running if this command stops. cancel asks the
+  scheduler to cancel. An accepted result is not proof the job has stopped.
+  purge deletes job directories whose newest change is older than
+  job_retention_days (default 30; 0 disables), on each cluster target and in
+  the serve host's collected/ archive.`,
 	"transfer": `molq transfer [RSYNC_OPTION...] SRC... DEST
 
   rsync syntax. SRC and DEST are CLUSTER:PATH or a local PATH, the way rsync
@@ -98,28 +131,6 @@ var commandHelp = map[string]string{
 
   molq transfer -av --delete --exclude build/ ./project/ hpc:/scratch/you/project/
   molq transfer -a hpc:runs/out.xyz .`,
-	"status": `molq status --ref JSON [--consistency live|bounded|cached]
-  --ref is a JobRef object, or @file. live queries the scheduler.`,
-	"list": `molq list CLUSTER [--state STATE] [--name NAME]
-  --state may be repeated. Lists jobs currently known to that destination.`,
-	"observe": `molq observe CLUSTER [--cursor TOKEN]
-  One sample and its changes. Pass the returned cursor on the next call.`,
-	"history": `molq history CLUSTER [--since TIME] [--until TIME] [--state STATE] [--name NAME] [--limit N]
-  molq history CLUSTER --refs JSON
-  Times are RFC3339 with a timezone. --refs cannot be combined with range filters.`,
-	"cancel": `molq cancel --ref JSON [--request-key KEY]
-  Asks the scheduler to cancel. An accepted result is not proof the job has stopped.`,
-	"logs": `molq logs --ref JSON [--stream stdout|stderr] [--offset N] [--limit N]
-  Read one log stream from the job's recorded location.`,
-	"wait": `molq wait --ref JSON [--timeout SECONDS] [--interval SECONDS]
-  Poll until the job is confirmed finished or the timeout expires.
-  The job keeps running if this command stops.`,
-	"purge": `molq purge [CLUSTER]
-  Delete job directories whose newest change is older than the
-  job_retention_days setting (default 30; 0 disables), on each cluster target
-  and in the serve host's collected/ archive. Deleted outright, not archived.
-  A listening serve process also does this at start and every 24 hours.
-  An unreachable cluster is reported in its result and does not stop the rest.`,
 	"rpc": `molq rpc METHOD [--params JSON]
   Call one public method. --params is a JSON object, @file, or @- for stdin.
   Method names and fields come from molq discover.`,
@@ -136,18 +147,20 @@ var commandHelp = map[string]string{
 }
 
 func printHelp(args []string) {
-	result := map[string]any{"command": "molq", "description": strings.TrimSpace(helpText), "commands": commandHelp}
+	text := helpText
 	if len(args) > 0 {
 		name := args[0]
 		if name == "help" && len(args) > 1 {
 			name = args[1]
 		}
-		if text, ok := commandHelp[name]; ok && name != "help" {
-			result = map[string]any{"command": name, "description": text}
+		if name == "--help" || name == "-h" {
+			name = ""
+		}
+		if specific, ok := commandHelp[name]; ok && name != "" && name != "help" {
+			text = specific
 		}
 	}
-	encoded, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "result": result})
-	fmt.Fprintln(os.Stdout, string(encoded))
+	fmt.Fprintln(os.Stdout, strings.TrimSpace(text))
 }
 
 func wantsHelp(args []string) bool {

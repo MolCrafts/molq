@@ -26,7 +26,7 @@ For one-off submissions, pass argv, inline JSON or `--spec @-`. Put transient sp
 
 Job is one allocation, with independent Resources/Scheduling/Execution. Execution units compose through UnitRef/Sequence/Parallel; each unit appears once. Single-unit argv stays simple. Memory is decimal-string bytes per node. MPI and CPU/task budgets are explicit. nvidia_mps is a formal Scheduler resource; no automatic MPS launch or whole-GPU fallback.
 
-Python request values are frozen dataclasses. Molq/Cluster/Job/JobCollection are RPC-only OOP handles. Before 1.0, the protocol has no independent version and no backward compatibility. RPC uses JSON-RPC 2.0 with named params, 1 MiB frames, 128-request batches and structured errors. CLI outputs JSON with stable exit semantics.
+Python request values are frozen dataclasses. Molq/Cluster/Job/JobCollection are RPC-only OOP handles. Before 1.0, the protocol has no independent version and no backward compatibility. RPC uses JSON-RPC 2.0 with named params, 1 MiB frames, 128-request batches and structured errors. CLI output is JSON with stable exit semantics. On a terminal, `cluster list` and `job list` print a table; `--json` or a pipe keeps the JSON object. `--help` is text. A transport failure keeps its own kind and diagnostic.
 
 Edit tools/build_contract.py for schemas and src/molq/client/objects.py for the Python projection. Regenerate protocol/contract.json, protocol/types.py, async_objects.py and TypeScript types; do not edit generated files directly. The TypeScript build compiles the SDK only.
 

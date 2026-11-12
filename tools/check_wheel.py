@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory() as temp:
     root = Path(temp)
     # Job directories live under the target home; keep them out of the real one.
     os.environ["HOME"] = str(root / "home")
-    for args in (["--version"], ["--help"], ["submit", "--help"]):
+    for args in (["--version"], ["--help"], ["job", "--help"]):
         command = subprocess.run(
             [sys.executable, "-m", "molq", *args],
             capture_output=True,
@@ -40,10 +40,12 @@ with tempfile.TemporaryDirectory() as temp:
             timeout=10,
             check=True,
         )
-        envelope = json.loads(command.stdout)
-        assert envelope["jsonrpc"] == "2.0" and "result" in envelope
         if args == ["--version"]:
-            assert envelope["result"]["version"] == "0.9.0"
+            envelope = json.loads(command.stdout)
+            assert envelope["jsonrpc"] == "2.0" and envelope["result"]["version"] == "0.9.0"
+        else:
+            assert "molq job" in command.stdout
+            assert "jsonrpc" not in command.stdout
     with Molq(registry=root / "registry.db", config=root / "config.json") as mq:
         if os.name != "nt":
             mq.clusters.register(name="local", scheduler="shell")

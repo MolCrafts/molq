@@ -2,13 +2,15 @@
 
 ## Unreleased
 
+The CLI names the object. Destinations are `molq cluster list|get|register|update|remove`. Allocations are `molq job list|submit|status|cancel|logs|wait|history|observe|purge`. `molq list`, `molq clusters`, and the old top-level job verbs are rejected with the replacement usage. On a terminal, the two list commands print a table; a pipe, a redirect, or `--json` keeps the JSON object. `--help` is text.
+
 SSH uses the alias's OpenSSH ControlPath when one is configured, so an existing ControlMaster is the connection. A private ControlPath remains the fallback. `AUTH_REQUIRED`, `TRANSPORT_UNAVAILABLE`, and `CONNECTION_TIMEOUT` from that connection stay those kinds, with the SSH diagnostic, instead of being rewritten as `SCHEDULER_UNAVAILABLE`.
 
 Slurm maps `after_started` to the native `after` dependency, which waits until the named allocation has begun.
 
 Slurm receives the batch script through `sbatch` stdin. The command line pins the default working directory and allocation logs to the MolQ job directory, taking precedence over inherited `SBATCH_*` settings.
 
-Job directories are deleted after a retention window. The new `job_retention_days` setting (default 30, `0` disables) deletes outright, without archiving, every job directory whose directory and immediate entries have not changed for that many days, on each registered cluster's `~/.molcrafts/molq/jobs/` and in the serve host's `collected/` archive. Only 32-digit job identity directories are touched. A listening `molq serve` purges at start and every 24 hours; `jobs.purge` and `molq purge [CLUSTER]` purge on demand and report each target and archive separately, so an unreachable cluster sets `partial_failure` without stopping the others.
+Job directories are deleted after a retention window. The new `job_retention_days` setting (default 30, `0` disables) deletes outright, without archiving, every job directory whose directory and immediate entries have not changed for that many days, on each registered cluster's `~/.molcrafts/molq/jobs/` and in the serve host's `collected/` archive. Only 32-digit job identity directories are touched. A listening `molq serve` purges at start and every 24 hours; `jobs.purge` and `molq job purge [CLUSTER]` purge on demand and report each target and archive separately, so an unreachable cluster sets `partial_failure` without stopping the others.
 
 Breaking: Cluster definitions drop `target_root`. Every job directory is `~/.molcrafts/molq/jobs/<id>` under the target login's home; re-register Clusters without the field. SSH Clusters keep no molq files after a job ends. The first observation of a confirmed terminal state moves the job directory (script, stdout, stderr, receipts and files written to the default working directory) to `collected/<cluster-id>/` next to the registry and removes it from the target; `logs.read` and Shell receipts then use the local copy. SSH `files.transfer` now passes the transport's rsh before the operand separator, so remote copies no longer fail.
 

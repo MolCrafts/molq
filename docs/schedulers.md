@@ -49,9 +49,9 @@ compute nodes for temporary payload files.
 For the CLI, save the equivalent definition as JSON:
 
 ```sh
-molq clusters register --definition @hpc.json
-molq clusters list
-molq clusters get hpc
+molq cluster register --definition @hpc.json
+molq cluster list
+molq cluster get hpc
 ```
 
 ## Scheduler mappings

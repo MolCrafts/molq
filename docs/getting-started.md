@@ -65,8 +65,8 @@ execution machine.
 Register it and submit a command:
 
 ```sh
-molq clusters register --definition @local.json
-molq submit local -- echo "hello molq" > submit.json
+molq cluster register --definition @local.json
+molq job submit local -- echo "hello molq" > submit.json
 ```
 
 Extract the reference from the JSON response:
@@ -78,12 +78,14 @@ from pathlib import Path
 response = json.loads(Path("submit.json").read_text())
 Path("ref.json").write_text(json.dumps(response["result"]["ref"]))
 PY
-molq wait --ref @ref.json --timeout 30
-molq logs --ref @ref.json
+molq job wait --ref @ref.json --timeout 30
+molq job logs --ref @ref.json
 ```
 
-Business commands return JSON. `--ref` accepts the reference itself, rather than
-the complete submission response. See [CLI reference](cli.md) for exit codes.
+A redirected command returns JSON. On a terminal, `cluster list` and `job list`
+print a table; `--json` keeps the JSON object. `--ref` accepts the reference
+itself, rather than the complete submission response. See [CLI reference](cli.md)
+for exit codes.
 
 ## Return to a job
 

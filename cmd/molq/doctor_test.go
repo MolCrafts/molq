@@ -81,12 +81,11 @@ func TestHelpMentionsDoctor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(output.Bytes(), []byte("molq doctor")) || !bytes.Contains(output.Bytes(), []byte("molq submit")) {
+	if !bytes.Contains(output.Bytes(), []byte("molq doctor")) || !bytes.Contains(output.Bytes(), []byte("molq job submit")) || !bytes.Contains(output.Bytes(), []byte("molq job list")) {
 		t.Fatalf("help = %s", output.String())
 	}
-	var envelope map[string]any
-	if err := json.Unmarshal(output.Bytes(), &envelope); err != nil || envelope["jsonrpc"] != "2.0" {
-		t.Fatalf("help must be JSON-RPC: %s", output.String())
+	if bytes.Contains(output.Bytes(), []byte("jsonrpc")) {
+		t.Fatalf("help is text, not a JSON-RPC envelope: %s", output.String())
 	}
 }
 
@@ -103,7 +102,7 @@ func TestHelpAndGlobalsDoNotConsumeJobArguments(t *testing.T) {
 	if len(positional) != 6 || positional[4] != "--registry" || positional[5] != "payload" {
 		t.Fatalf("job argv = %#v", positional)
 	}
-	if wantsHelp([]string{"clusters", "get", "help"}) {
+	if wantsHelp([]string{"cluster", "get", "help"}) {
 		t.Fatal("cluster name help was interpreted as CLI help")
 	}
 }

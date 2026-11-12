@@ -1,8 +1,17 @@
 # Command line
 
-All commands, including help and version, print JSON responses with either
-`result` or `error`. Watch streams one JSON response per line. Diagnostics go to
-stderr; stdout contains no banners, progress bars, tables or raw logs.
+A cluster is a registered destination. A job is one allocation on that cluster.
+The SSH host in `~/.ssh/config` is only how the cluster is reached.
+
+```sh
+molq cluster list
+molq job list hpc
+```
+
+On a terminal, those two lists print a table. A pipe, a redirect, or `--json`
+prints one JSON object with either `result` or `error`. `--help` is text.
+`--version` is JSON. Other commands print JSON. Watch streams one JSON response
+per line. Diagnostics go to stderr. Exit codes are below.
 
 ## Connections
 
@@ -10,8 +19,8 @@ Without an endpoint, commands use a temporary stdio service. Select an HTTP
 service with `--endpoint` and `--token`, or the configuration's `client` section.
 
 ```sh
-molq --config ./config.json clusters list
-molq --registry ./registry.db clusters list
+molq --config ./config.json cluster list
+molq --registry ./registry.db cluster list
 ```
 
 The same connection applies to diagnostics, generic RPC, and `watch`.
@@ -19,13 +28,13 @@ The same connection applies to diagnostics, generic RPC, and `watch`.
 ## Jobs
 
 ```sh
-molq submit local -- echo hello
-molq submit hpc --spec @job.json
+molq job submit local -- echo hello
+molq job submit hpc --spec @job.json
 molq transfer -a --delete --exclude build/ ./project/ hpc:/scratch/you/project/
-molq status --ref @ref.json
-molq wait --ref @ref.json --timeout 600 --interval 2
-molq logs --ref @ref.json --stream stderr --offset 0 --limit 65536
-molq cancel --ref @ref.json
+molq job status --ref @ref.json
+molq job wait --ref @ref.json --timeout 600 --interval 2
+molq job logs --ref @ref.json --stream stderr --offset 0 --limit 65536
+molq job cancel --ref @ref.json
 ```
 
 `transfer` is rsync syntax: options, then `SRC... DEST`. `CLUSTER:PATH` names a
@@ -34,6 +43,7 @@ local. See [Files and logs](remote-files.md#transfer-files).
 
 Use either `--spec` or argv after `--`. Simple argv submissions accept `--name`
 and `--comment` before `--`; with a spec, put them in `scheduling` instead.
+Use `--spec @-` to submit JSON from stdin or pass the JSON object inline.
 Comments require a scheduler mapping: Slurm and LSF support them; PBS and Shell
 reject them.
 
@@ -44,12 +54,12 @@ Wait timeouts and intervals are in seconds.
 ## Queue and history
 
 ```sh
-molq list hpc --state running --name simulation
-molq history hpc --state failed --limit 100
-molq history hpc --refs @refs.json
-molq observe hpc
+molq job list hpc --state running --name simulation
+molq job history hpc --state failed --limit 100
+molq job history hpc --refs @refs.json
+molq job observe hpc
 molq watch --cluster hpc --interval 5
-molq purge hpc
+molq job purge hpc
 ```
 
 `--state` is repeatable. Slurm range history accepts `--since` and `--until` as
@@ -62,9 +72,9 @@ See [monitoring](monitoring.md) for coverage and cursor semantics.
 ## Destinations and diagnostics
 
 ```sh
-molq clusters register --definition @hpc.json
-molq clusters get hpc
-molq clusters update hpc --definition @hpc.json --revision 1
+molq cluster register --definition @hpc.json
+molq cluster get hpc
+molq cluster update hpc --definition @hpc.json --revision 1
 molq ping
 molq health
 molq doctor
@@ -78,9 +88,12 @@ inline JSON, `@file`, or `@-` for stdin.
 ## Output contract
 
 `molq --version` returns the product version in `result.version`.
-`molq --help` returns `result.command`, `result.description` and the command
-catalog. `molq COMMAND --help` returns that command’s structured help.
-Arguments after `--` belong to your executable, including `--help`.
+`molq --help` and `molq COMMAND --help` print text. Arguments after `--` belong
+to your executable, including `--help`.
+
+`molq cluster list` and `molq job list` print a table when stdout is a terminal.
+Pass `--json`, or redirect stdout, to receive the JSON object instead. Agents
+use that object. They do not parse the table.
 
 SDK methods return values and produce no console output. Python examples use
 `json.dumps(...)`; TypeScript examples use `JSON.stringify(...)`. Logs remain

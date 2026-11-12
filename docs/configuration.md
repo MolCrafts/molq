@@ -22,7 +22,7 @@ mq.close()
 ```
 
 ```sh
-molq --registry ./registry.db --config ./config.json clusters list
+molq --registry ./registry.db --config ./config.json cluster list
 ```
 
 Keep the registry on local disk. Use one active service per registry when sharing
@@ -56,7 +56,7 @@ molq serve --config ./config.json
 Use it from another:
 
 ```sh
-molq --config ./config.json clusters list
+molq --config ./config.json cluster list
 ```
 
 Python and TypeScript take the endpoint and token explicitly:
@@ -111,12 +111,12 @@ registry, including archives of removed clusters. Only directories named by a
 
 ```sh
 molq rpc config.set --params '{"key":"job_retention_days","value":30}'
-molq purge
+molq job purge
 ```
 
 A listening `molq serve` purges at start and every 24 hours, and reads the
 setting on each pass. A temporary stdio service does not purge on its own; run
-`molq purge [CLUSTER]` (the `jobs.purge` method). Each cluster target and each
+`molq job purge [CLUSTER]` (the `jobs.purge` method). Each cluster target and each
 archive gets one result listing the removed directories; a cluster that cannot
 be reached reports an error there, sets `partial_failure` (CLI exit 8), and does
 not stop the others. The listening service writes those failures to stderr.

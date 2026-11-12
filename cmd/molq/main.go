@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mattn/go-isatty"
+
 	"github.com/MolCrafts/molq/watch"
 
 	"github.com/MolCrafts/molq/config"
@@ -34,7 +36,27 @@ type commandExit struct{ code int }
 
 func (e commandExit) Error() string { return fmt.Sprintf("command exit %d", e.code) }
 
+var forceJSON bool
+
+func peelJSON(args []string) ([]string, bool) {
+	force := false
+	var kept []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--" {
+			kept = append(kept, args[i:]...)
+			break
+		}
+		if args[i] == "--json" {
+			force = true
+			continue
+		}
+		kept = append(kept, args[i])
+	}
+	return kept, force
+}
+
 func run(args []string) error {
+	args, forceJSON = peelJSON(args)
 	args = peelGlobals(args)
 	if wantsHelp(args) {
 		printHelp(args)
@@ -233,6 +255,10 @@ func resolveConfig(explicit string) (config.File, string, error) {
 }
 
 func emit(err *protocol.Error) {
+	if !forceJSON && isatty.IsTerminal(os.Stdout.Fd()) {
+		fmt.Fprint(os.Stdout, formatError(err))
+		return
+	}
 	payload := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      nil,
