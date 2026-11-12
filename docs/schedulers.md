@@ -40,7 +40,11 @@ hpc.close()
 
 Replace the alias and account with your site's values. Paths in execution
 specs refer to the target filesystem. Sync inputs with `transfer`, then
-submit. The job runs in its execution working directory.
+submit. MolQ streams the batch script to `sbatch` and passes the default working
+directory and allocation log paths as command-line options. They live in
+`~/.molcrafts/molq/jobs/<id>/` on the target. An explicit execution or unit
+`cwd` controls where the payload runs. Use target scratch visible to the
+compute nodes for temporary payload files.
 
 For the CLI, save the equivalent definition as JSON:
 

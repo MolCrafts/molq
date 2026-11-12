@@ -139,15 +139,25 @@ func (s *Slurm) validateUnits(spec map[string]any) error {
 }
 
 func (s *Slurm) Render(spec map[string]any, directory string) (string, error) {
+	options := slurmLocationOptions(directory)
+	for i, option := range options {
+		flag, value, _ := strings.Cut(option, "=")
+		options[i] = flag + "=" + quote(value)
+	}
+	return s.render(spec, options)
+}
+
+func slurmLocationOptions(directory string) []string {
+	// Slurm expands percent sequences in output and error filenames.
+	logs := strings.ReplaceAll(directory, "%", "%%")
+	return []string{"--chdir=" + directory, "--output=" + logs + "/stdout", "--error=" + logs + "/stderr"}
+}
+
+func (s *Slurm) render(spec map[string]any, directives []string) (string, error) {
 	if err := s.Validate(spec); err != nil {
 		return "", err
 	}
 	resources, scheduling := mapAny(spec["resources"]), mapAny(spec["scheduling"])
-	directives := []string{
-		"--chdir=" + quote(directory),
-		"--output=" + quote(directory+"/stdout"),
-		"--error=" + quote(directory+"/stderr"),
-	}
 	for _, pair := range []struct{ field, flag string }{{"nodes", "nodes"}, {"tasks", "ntasks"}, {"cpus_per_task", "cpus-per-task"}} {
 		if value, ok := AsInt(resources[pair.field]); ok {
 			directives = append(directives, "--"+pair.flag+"="+itoa(value))
@@ -161,7 +171,13 @@ func (s *Slurm) Render(spec map[string]any, directory string) (string, error) {
 	if seconds, ok := AsInt(resources["time_limit_seconds"]); ok {
 		directives = append(directives, "--time="+itoa(seconds/3600)+":"+two(seconds%3600/60)+":"+two(seconds%60))
 	}
-	for _, pair := range []struct{ field, flag string }{{"name", "job-name"}, {"partition", "partition"}, {"account", "account"}, {"qos", "qos"}, {"reservation", "reservation"}} {
+	name := stringField(scheduling["name"])
+	if name == "" {
+		// Preserve the name Slurm used to derive from the staged script.
+		name = "job.sh"
+	}
+	directives = append(directives, "--job-name="+name)
+	for _, pair := range []struct{ field, flag string }{{"partition", "partition"}, {"account", "account"}, {"qos", "qos"}, {"reservation", "reservation"}} {
 		if value, ok := scheduling[pair.field].(string); ok && value != "" {
 			directives = append(directives, "--"+pair.flag+"="+value)
 		}
@@ -206,15 +222,26 @@ func (s *Slurm) Render(spec map[string]any, directory string) (string, error) {
 }
 
 func (s *Slurm) Submit(ctx context.Context, spec map[string]any, directory string) (Job, error) {
-	script, err := s.stage(ctx, spec, directory, s.Validate, s.Render)
+	script, err := s.render(spec, nil)
 	if err != nil {
 		return Job{}, err
 	}
-	argv := []string{"sbatch", "--parsable"}
+	// Slurm needs a shared working directory before it can open the logs.
+	result, err := s.transport.Run(ctx, []string{"sh", "-c", `umask 077; mkdir -p -- "${1%/*}" && mkdir -- "$1"`, "sh", directory}, 30*time.Second, nil, false)
+	if err != nil {
+		return Job{}, err
+	}
+	if result.ReturnCode != 0 {
+		return Job{}, protocol.Fail("FILE_UNAVAILABLE", "Cannot create Slurm job directory", map[string]any{
+			"path": directory, "stderr": string(result.Stderr[:min(len(result.Stderr), 4096)]),
+		})
+	}
+	// CLI options take precedence over inherited SBATCH_* settings.
+	argv := append([]string{"sbatch", "--parsable"}, slurmLocationOptions(directory)...)
 	if comment, ok := mapAny(spec["scheduling"])["comment"].(string); ok {
 		argv = append(argv, "--comment", comment)
 	}
-	text, err := s.native(ctx, append(argv, script), true, nil, false)
+	text, err := s.native(ctx, argv, true, []byte(script), true)
 	if err != nil {
 		return Job{}, err
 	}

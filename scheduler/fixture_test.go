@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 
 type fakeTransport struct {
 	calls    [][]string
+	inputs   []string
 	files    map[string][]byte
 	scripted []transport.Result
 	fail     error
@@ -31,8 +33,13 @@ func script(values ...any) *fakeTransport {
 	return fake
 }
 
-func (f *fakeTransport) Run(_ context.Context, argv []string, _ time.Duration, _ []byte, _ bool) (transport.Result, error) {
+func (f *fakeTransport) Run(_ context.Context, argv []string, _ time.Duration, input []byte, hasInput bool) (transport.Result, error) {
 	f.calls = append(f.calls, append([]string{}, argv...))
+	stdin := ""
+	if hasInput {
+		stdin = string(input)
+	}
+	f.inputs = append(f.inputs, stdin)
 	if f.fail != nil {
 		err := f.fail
 		f.fail = nil
@@ -201,17 +208,36 @@ func TestSlurmQueueMissUsesAccounting(t *testing.T) {
 	}
 }
 
-func TestSlurmSubmitUsesRenderer(t *testing.T) {
-	fake := script("123;cluster", `{"jobs":[{"job_id":"123","job_state":"PENDING","submit_time":1710000000,"current_working_directory":"/target/job","name":"test"}]}`)
-	job, err := NewSlurm(fake, map[string]any{}).Submit(context.Background(), specWith(nil, nil, nil), "/target/job")
+func TestSlurmSubmitStreamsScriptAndSetsJobPaths(t *testing.T) {
+	fake := script("", "123;cluster", `{"jobs":[{"job_id":"123","job_state":"PENDING","submit_time":1710000000,"current_working_directory":"/target/a b%j/job","name":"test"}]}`)
+	directory := "/target/a b%j/job"
+	spec := specWith(map[string]any{"tasks": 2}, map[string]any{"comment": "test comment"}, nil)
+	job, err := NewSlurm(fake, map[string]any{}).Submit(context.Background(), spec, directory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.NativeID != "123" || !strings.Contains(string(fake.files["/target/job/job.sh"]), "#SBATCH") {
-		t.Fatalf("job=%+v file=%s", job, fake.files["/target/job/job.sh"])
+	if job.NativeID != "123" || len(fake.files) != 0 || len(fake.calls) != 3 {
+		t.Fatalf("job=%+v files=%v calls=%v", job, fake.files, fake.calls)
 	}
-	if strings.Join(fake.calls[0], " ") != "sbatch --parsable /target/job/job.sh" {
-		t.Fatal(fake.calls[0])
+	if fake.calls[0][0] != "sh" || fake.calls[0][len(fake.calls[0])-1] != directory {
+		t.Fatalf("directory creation = %v", fake.calls[0])
+	}
+	want := []string{"sbatch", "--parsable", "--chdir=" + directory, "--output=/target/a b%%j/job/stdout", "--error=/target/a b%%j/job/stderr", "--comment", "test comment"}
+	if !slices.Equal(fake.calls[1], want) {
+		t.Fatalf("submission argv = %v", fake.calls[1])
+	}
+	stdin := fake.inputs[1]
+	if !strings.HasPrefix(stdin, "#!/usr/bin/env bash\n") || !strings.Contains(stdin, "#SBATCH --ntasks=2\n") || !strings.Contains(stdin, "'echo' 'ok'") || strings.Contains(stdin, "#SBATCH --output") {
+		t.Fatalf("submission stdin = %q", stdin)
+	}
+}
+
+func TestSlurmDirectoryFailureDoesNotSubmit(t *testing.T) {
+	fake := script(transport.Result{ReturnCode: 1, Stderr: []byte("cannot create directory")})
+	_, err := NewSlurm(fake, nil).Submit(context.Background(), specWith(nil, nil, nil), "/target/job")
+	item, _ := err.(*protocol.Error)
+	if item == nil || item.Kind != "FILE_UNAVAILABLE" || item.Outcome != "not_applied" || len(fake.calls) != 1 {
+		t.Fatalf("err=%#v calls=%v", err, fake.calls)
 	}
 }
 
@@ -316,7 +342,7 @@ func TestShellRejectsResourcesAndUnboundMPI(t *testing.T) {
 }
 
 func TestPostAcceptanceQueryFailureRemainsUnknown(t *testing.T) {
-	_, err := NewSlurm(script("123", transport.Result{ReturnCode: 1, Stderr: []byte("accounting unavailable")}), map[string]any{}).Submit(context.Background(), specWith(nil, nil, nil), "/target")
+	_, err := NewSlurm(script("", "123", transport.Result{ReturnCode: 1, Stderr: []byte("accounting unavailable")}), map[string]any{}).Submit(context.Background(), specWith(nil, nil, nil), "/target")
 	item, _ := err.(*protocol.Error)
 	if item == nil || item.Kind != "OUTCOME_UNKNOWN" || item.Context["native_id"] == nil {
 		t.Fatalf("%#v", err)
