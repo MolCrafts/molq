@@ -181,3 +181,44 @@ func TestSSHTransferKeepsRshBeforeOperands(t *testing.T) {
 		t.Fatalf("remote copy = %q, %v", body, err)
 	}
 }
+
+// A scoped directory transfer walks the links below each operand with
+// find -exec. GNU find refuses a second "{}" in one -exec ... + clause, and
+// the validator passes its own text as an argument, so that text must not
+// spell "{}" or every scoped directory transfer fails on a Linux target.
+func TestScopedDirectoryTransferWithALinkUnderTheRoot(t *testing.T) {
+	if _, err := exec.LookPath("rsync"); err != nil {
+		t.Skip("rsync is not installed")
+	}
+	root := t.TempDir()
+	service := openTransferService(t, root)
+	source := filepath.Join(root, "source")
+	destination := filepath.Join(root, "destination")
+	if err := os.MkdirAll(source, 0o755); err != nil || os.MkdirAll(destination, 0o755) != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "note.txt"), []byte("copied"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("note.txt", filepath.Join(source, "alias.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(source, "note.txt"), filepath.Join(destination, "alias.txt")); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Call("files.transfer", map[string]any{
+		"sources":     []any{map[string]any{"cluster": "from", "path": source + "/", "root": root}},
+		"destination": map[string]any{"cluster": "to", "path": destination + "/", "root": root},
+		"options":     []any{"-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.(map[string]any)["outcome"] != "applied" {
+		t.Fatalf("result = %#v", result)
+	}
+	body, err := os.ReadFile(filepath.Join(destination, "note.txt"))
+	if err != nil || string(body) != "copied" {
+		t.Fatalf("body = %q, err = %v", body, err)
+	}
+}

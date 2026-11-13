@@ -74,12 +74,14 @@ func scopedPath(ctx context.Context, runner transport.Transport, value map[strin
 // A scoped directory transfer must validate links below the operand as well:
 // rsync may dereference them, including directory links to another in-root tree.
 // The native deadline bounds repeated/cyclic links; no file contents are read.
+// The script passes its own text to find, and GNU find allows one "{}" per
+// -exec ... + clause in any argument, so the text spells the operand {""}.
 const transferScopeValidator = resolvePathScript + `root=$1; depth=$2; validator=$3; shift 3
 [ "$depth" -le 40 ] || exit 13
 for candidate do
  resolved=$(resolve "$candidate" "$root") || exit 13
  if [ -d "$resolved" ]; then
-   find "$resolved" -type l -exec sh -c "$validator" sh "$root" "$((depth+1))" "$validator" {} + || exit 13
+   find "$resolved" -type l -exec sh -c "$validator" sh "$root" "$((depth+1))" "$validator" {""} + || exit 13
  fi
 done`
 
