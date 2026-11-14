@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from molq.artifact import Artifact, ArtifactDelivery, CopyArtifact, SharedPathArtifact
 from molq.domain import (
     Accelerator,
     Execution,
@@ -14,6 +15,13 @@ from molq.domain import (
     Scheduling,
     Sequence,
     UnitRef,
+)
+from molq.environment import (
+    CondaEnvironment,
+    DockerEnvironment,
+    DockerMount,
+    Environment,
+    UvEnvironment,
 )
 from molq.errors import MolqError
 
@@ -39,6 +47,21 @@ __all__ = [
     "Parallel",
     "JobArray",
     "JobSpec",
+    "Environment",
+    "CondaEnvironment",
+    "UvEnvironment",
+    "DockerEnvironment",
+    "DockerMount",
+    "ArtifactManifest",
+    "Catalog",
+    "Glob",
+    "OutputPath",
+    "ResolvedArtifacts",
+    "ManifestDelivery",
+    "Artifact",
+    "ArtifactDelivery",
+    "CopyArtifact",
+    "SharedPathArtifact",
 ]
 
 
@@ -48,6 +71,17 @@ def __getattr__(name: str):
         from molq.client import objects
 
         return getattr(objects, name)
+    if name in {
+        "ArtifactManifest",
+        "Catalog",
+        "Glob",
+        "OutputPath",
+        "ResolvedArtifacts",
+        "ManifestDelivery",
+    }:
+        from molq import artifact_manifest
+
+        return getattr(artifact_manifest, name)
     if name == "Path":
         from molq.client.path import Path
 

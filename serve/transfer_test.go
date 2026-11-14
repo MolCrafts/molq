@@ -222,3 +222,17 @@ func TestScopedDirectoryTransferWithALinkUnderTheRoot(t *testing.T) {
 		t.Fatalf("body = %q, err = %v", body, err)
 	}
 }
+
+func TestScopedSSHOperandRejectsRemoteShellExpansion(t *testing.T) {
+	remote := map[string]any{"kind": "ssh", "alias": "fixture"}
+	local := map[string]any{"kind": "local"}
+	for _, name := range []string{"/output/*.xyz", "/output/with space", "/output/a$(echo x)"} {
+		_, _, _, err := transferRoute(
+			[]location{{transport: remote, path: name, root: "/output"}},
+			location{transport: local, path: "/destination"},
+		)
+		if err == nil {
+			t.Fatalf("unsafe scoped operand accepted: %q", name)
+		}
+	}
+}
