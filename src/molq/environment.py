@@ -5,6 +5,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 __all__ = [
+    "ApptainerEnvironment",
+    "ApptainerMount",
     "Environment",
     "CondaEnvironment",
     "UvEnvironment",
@@ -122,3 +124,71 @@ class DockerEnvironment(Environment):
                 raise ValueError("Invalid Docker environment variable name")
             wrapped.extend(("--env", f"{key}={value}"))
         return [*wrapped, "--entrypoint", command, self.image, *args]
+
+
+@dataclass(frozen=True)
+class ApptainerMount:
+    """Bind a host path to a container path.
+
+    Args:
+        source: Absolute path on the execution host.
+        target: Absolute path inside the container.
+        read_only: Request a read-only bind.
+    """
+
+    source: str
+    target: str
+    read_only: bool = False
+
+
+@dataclass(frozen=True)
+class ApptainerEnvironment(Environment):
+    """Run a command in a prepared SIF on the execution host.
+
+    Args:
+        image: Absolute path to an existing target-side `.sif` file.
+        mounts: Explicit host-to-container binds.
+        workdir: Optional absolute working directory inside the container.
+        executable: Apptainer executable name or target path.
+    """
+
+    image: str
+    mounts: tuple[ApptainerMount, ...] = ()
+    workdir: str | None = None
+    executable: str = "apptainer"
+
+    def wrap(self, argv: Sequence[str]) -> list[str]:
+        """Build literal Apptainer argv for the supplied command.
+
+        Raises:
+            ValueError: A command, image path, bind, or workdir is invalid.
+        """
+        if (
+            not self.image.startswith("/")
+            or not self.image.endswith(".sif")
+            or "://" in self.image
+            or any(char in self.image for char in "\x00\r\n")
+        ):
+            raise ValueError("Supply an absolute target path to a SIF (.sif) file")
+        wrapped = [self.executable, "exec"]
+        for mount in self.mounts:
+            for path in (mount.source, mount.target):
+                if not path.startswith("/") or any(
+                    char in path for char in ",:\x00\r\n"
+                ):
+                    raise ValueError(
+                        "Apptainer bind paths must be absolute without commas or colons"
+                    )
+            binding = f"{mount.source}:{mount.target}"
+            if mount.read_only:
+                binding += ":ro"
+            wrapped.extend(("--bind", binding))
+        if self.workdir is not None:
+            if not self.workdir.startswith("/") or any(
+                char in self.workdir for char in "\x00\r\n"
+            ):
+                raise ValueError(
+                    "Apptainer workdir must be absolute inside the container"
+                )
+            wrapped.extend(("--pwd", self.workdir))
+        return [*wrapped, "--", self.image, *_command(argv)]

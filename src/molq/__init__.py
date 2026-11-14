@@ -17,6 +17,8 @@ from molq.domain import (
     UnitRef,
 )
 from molq.environment import (
+    ApptainerEnvironment,
+    ApptainerMount,
     CondaEnvironment,
     DockerEnvironment,
     DockerMount,
@@ -49,6 +51,8 @@ __all__ = [
     "JobArray",
     "JobSpec",
     "Environment",
+    "ApptainerEnvironment",
+    "ApptainerMount",
     "CondaEnvironment",
     "UvEnvironment",
     "DockerEnvironment",

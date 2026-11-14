@@ -6,6 +6,8 @@ import sys
 import pytest
 
 from molq import (
+    ApptainerEnvironment,
+    ApptainerMount,
     CondaEnvironment,
     CopyArtifact,
     DockerEnvironment,
@@ -69,6 +71,65 @@ def test_environments_keep_literal_arguments_and_prepared_resources():
         JobSpec.argv(wrapped).to_wire()["execution"]["units"][0]["command"]["argv"]
         == wrapped
     )
+
+
+def test_apptainer_wraps_explicit_sif_and_preserves_literal_arguments():
+    image = "/target/project images/simulation.sif"
+    command = ["python", "script with spaces.py", "--name=$literal;!", ""]
+    apptainer = ApptainerEnvironment(
+        image=image,
+        mounts=(
+            ApptainerMount("/shared/input data", "/inputs", read_only=True),
+            ApptainerMount("/shared/results", "/workspace"),
+        ),
+        workdir="/workspace",
+    )
+    argv = apptainer.wrap(command)
+    assert argv == [
+        "apptainer",
+        "exec",
+        "--bind",
+        "/shared/input data:/inputs:ro",
+        "--bind",
+        "/shared/results:/workspace",
+        "--pwd",
+        "/workspace",
+        "--",
+        image,
+        *command,
+    ]
+    assert (
+        JobSpec.argv(argv).to_wire()["execution"]["units"][0]["command"]["argv"] == argv
+    )
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "relative.sif",
+        "docker://alpine:latest",
+        "oras://registry.example/tool.sif",
+        "Arrhenius:/shared/prepared.sif",
+        "/tmp/docker://alpine.sif",
+        "/shared/sandbox",
+        "/shared/prepared.sif/",
+        "/shared/bad\x00.sif",
+    ],
+)
+def test_apptainer_rejects_non_local_sif_references(image):
+    with pytest.raises(ValueError, match="absolute .*SIF"):
+        ApptainerEnvironment(image=image).wrap(["true"])
+
+
+def test_apptainer_rejects_ambiguous_mounts_and_relative_workdir():
+    image = "/shared/prepared.sif"
+    for source in ("relative", "/shared/one,two", "/shared/one:two"):
+        with pytest.raises(ValueError, match="bind paths"):
+            ApptainerEnvironment(image, mounts=(ApptainerMount(source, "/data"),)).wrap(
+                ["true"]
+            )
+    with pytest.raises(ValueError, match="workdir"):
+        ApptainerEnvironment(image, workdir="relative").wrap(["true"])
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file transfer")

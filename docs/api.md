@@ -132,6 +132,38 @@ the environment is stored at a specific path. For Docker, pass
 entrypoint. Docker uses an image already on the target daemon, and uv
 uses a prepared project without syncing or downloading Python.
 
+`ApptainerEnvironment` takes an absolute target-side `.sif` path and wraps
+the command with `apptainer exec`. Prepare or transfer the SIF before
+submission. The wrapper performs no I/O, and a job fails through Apptainer
+if the file is missing or unusable. Supply the cluster, Slurm partition,
+and account through the existing submission interface.
+
+```python
+from molq import ApptainerEnvironment, ApptainerMount, JobSpec, Molq, Scheduling
+
+project = "/shared/project/runs/simulation"
+environment = ApptainerEnvironment(
+    image="/shared/project/images/simulation-amd64.sif",
+    mounts=(ApptainerMount(project, "/workspace"),),
+    workdir="/workspace",
+)
+
+with Molq() as mq:
+    job = mq.cluster("Arrhenius").submit(
+        JobSpec.argv(
+            environment.wrap(["python", "/opt/sim/run.py"]),
+            scheduling=Scheduling(partition="cpu", account="your-cpu-account"),
+        ),
+        project_root=project,
+    )
+```
+
+The bind source is on the compute node's filesystem. The workdir is inside
+the container. Apptainer also applies the site's default mounts. On Arrhenius,
+keep SIF files on project storage outside the home directory and choose an
+image for the partition's CPU architecture.
+[Arrhenius container guide](https://user.naiss.se/arrhenius_hpc/software_development/containers/)
+
 `Artifact.deliver()` is an explicit operation independent of job status.
 `CopyArtifact` uses `Path.transfer`, so uploads and downloads use the same
 rsync RPC as the CLI. Supply a destination filename for a file or a target
