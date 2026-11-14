@@ -30,7 +30,7 @@ assert not importlib.resources.files("molq.protocol").joinpath("v1.json").is_fil
 
 with tempfile.TemporaryDirectory() as temp:
     root = Path(temp)
-    # Job directories live under the target home; keep them out of the real one.
+    # Isolate default CLI configuration from the user.
     os.environ["HOME"] = str(root / "home")
     for args in (["--version"], ["--help"], ["job", "--help"]):
         command = subprocess.run(
@@ -52,7 +52,9 @@ with tempfile.TemporaryDirectory() as temp:
     with Molq(registry=root / "registry.db", config=root / "config.json") as mq:
         if os.name != "nt":
             mq.clusters.register(name="local", scheduler="shell")
-            job = mq.cluster("local").submit(JobSpec.argv(["echo", "installed-wheel"]))
+            job = mq.cluster("local").submit(
+                JobSpec.argv(["echo", "installed-wheel"]), project_root=root
+            )
             assert job.wait(timeout=10, interval=0.05)["completion"]["successful"]
             assert "installed-wheel" in job.logs()["text"]
         else:
@@ -63,7 +65,7 @@ with tempfile.TemporaryDirectory() as temp:
             )
         assert len(mq.clusters.list()) == 1
     if os.name != "nt":
-        local = submit("local", registry=root / "registry.db")
+        local = submit("local", registry=root / "registry.db", project_root=root)
 
         @local
         def hello():
@@ -78,7 +80,9 @@ with tempfile.TemporaryDirectory() as temp:
             local.close()
 
         async def check_async():
-            local = await asubmit("local", "local", registry=root / "registry.db")
+            local = await asubmit(
+                "local", "local", registry=root / "registry.db", project_root=root
+            )
 
             @local
             def hello():
