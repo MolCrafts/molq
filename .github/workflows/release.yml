@@ -18,14 +18,14 @@ jobs:
     permissions:
       contents: read
     name: release
-    uses: MolCrafts/molcrafts-ci/.github/workflows/context.yml@master
+    uses: MolCrafts/molcrafts-ci/.github/workflows/context.yml@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
 
   verify:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
     name: release / verify
-    uses: ./.github/workflows/ci.yml
+    uses: ./.github/workflows/test.yml
     secrets: inherit
 
   version:

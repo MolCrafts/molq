@@ -1,7 +1,7 @@
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: test-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ !contains(fromJSON('["refs/heads/dev","refs/heads/master"]'), github.ref) && !startsWith(github.ref, 'refs/tags/') }}
-name: ci
+name: test
 
 'on':
   push:
@@ -21,14 +21,14 @@ jobs:
   context:
     permissions:
       contents: read
-    name: ci
-    uses: MolCrafts/molcrafts-ci/.github/workflows/context.yml@master
+    name: test
+    uses: MolCrafts/molcrafts-ci/.github/workflows/context.yml@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
 
   docs:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Manual
+    name: test / Manual
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +46,7 @@ jobs:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Contract, lint and types
+    name: test / Contract, lint and types
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +72,7 @@ jobs:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Go serve on ${{ matrix.os }}
+    name: test / Go serve on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -93,7 +93,7 @@ jobs:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Python ${{ matrix.python }} on ${{ matrix.os }}
+    name: test / Python ${{ matrix.python }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -125,7 +125,7 @@ jobs:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Windows remote control plane
+    name: test / Windows remote control plane
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -148,7 +148,7 @@ jobs:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Native TypeScript peer
+    name: test / Native TypeScript peer
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -178,7 +178,7 @@ jobs:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Installed artifact
+    name: test / Installed artifact
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -204,7 +204,7 @@ jobs:
           /tmp/molq-wheel/bin/molq --help
 
   workflow-policy:
-    name: ci / workflows
+    name: test / workflows
     needs: context
     if: needs.context.outputs.skip-pr != 'true'
     runs-on: ubuntu-latest
@@ -212,4 +212,15 @@ jobs:
       contents: read
     steps:
     - uses: actions/checkout@v7
-    - uses: MolCrafts/molcrafts-ci/actions/check-workflows@master
+    - uses: MolCrafts/molcrafts-ci/actions/check-workflows@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
+
+  result:
+    name: test / result
+    needs: [context, docs, lint, go, test, windows, typescript, package, workflow-policy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job succeeded or was skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: echo "$RESULTS" | jq -e 'all(.[]; . == "success" or . == "skipped")'
