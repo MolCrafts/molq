@@ -288,7 +288,10 @@ func (s *Service) jobRoot(ctx context.Context, cluster map[string]any) (string, 
 		if err != nil {
 			return "", protocol.Fail("FILE_UNAVAILABLE", "Cannot resolve the home directory for job directories", nil)
 		}
-		home, known = filepath.ToSlash(local), true
+		if !filepath.IsAbs(local) || strings.ContainsAny(local, "\n\r") {
+			return "", protocol.Fail("FILE_UNAVAILABLE", "Local home is not an absolute path", nil)
+		}
+		return filepath.ToSlash(filepath.Join(local, scheduler.JobRoot)), nil
 	}
 	if !known {
 		release, err := s.acquire(ctx, stringField(cluster["id"]))
