@@ -5,7 +5,7 @@ Decorate a function with a registered destination:
 ```python
 from molq import JobSpec, submit
 
-local = submit("local")  # Bound in the quickstart.
+local = submit("local", project_root="/absolute/project")
 
 
 @local
@@ -50,7 +50,7 @@ spec = JobSpec(
         units=(ExecutionUnit.argv("main", ["python", "simulate.py"]),),
     ),
 )
-hpc = submit("hpc")
+hpc = submit("hpc", project_root="/shared/project")
 print(json.dumps(hpc.preview(spec), ensure_ascii=False))
 
 
@@ -181,10 +181,9 @@ reported as `FAILED` can have an `out_of_memory` reason when native accounting
 shows an OOM step. The allocation's original state and the step evidence are
 both preserved.
 
-## Job directory retention
+## Project logs and outputs
 
-MolQ can purge its manifest-owned logs, scripts and receipts after
-`job_retention_days`. Application files stay in their working directory
-and can be downloaded using an [artifact manifest](api.md#select-named-outputs-with-a-manifest).
-See [retention](configuration.md#job-directory-retention) for eligibility
-and on-demand purge.
+Pass the existing target project directory as `project_root` when submitting.
+Default logs and Shell receipts follow that project. Use an
+[artifact manifest](api.md#select-named-outputs-with-a-manifest) to download
+named user outputs. See [files and logs](remote-files.md) for log access.

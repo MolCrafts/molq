@@ -7,10 +7,11 @@ Each yield receives a `Job`; the function's `return` is its result.
 
 ```python
 import json
+from pathlib import Path
 
 from molq import JobSpec, submit
 
-local = submit("dev", "local")
+local = submit("dev", "local", project_root=Path.cwd())
 
 
 @local
@@ -25,10 +26,12 @@ print(json.dumps(job.logs(), ensure_ascii=False))
 local.close()
 ```
 
-`submit("dev", "local")` binds a local Shell destination. Jobs run in
-`~/.molcrafts/molq/jobs` on the execution machine. Repeating an
-explicit binding reuses the destination if the supplied fields match.
-Use `submit("dev")` or `submit("hpc")` to select an existing destination.
+The decorator binds an existing target directory through `project_root`.
+Each run creates a directory under `<project_root>/.molq/jobs` for default
+logs and Shell receipts. A cluster-qualified `Path` must belong to the
+selected cluster. `Workspace.path()` supplies a scoped project path.
+Repeating an explicit cluster binding reuses the destination if its definition
+matches.
 See [clusters](schedulers.md) for SSH and scheduler settings.
 
 The function runs on your submission machine. Each yield submits one allocation;
@@ -46,12 +49,13 @@ Use `asubmit(...)` and await decorated calls and job operations:
 ```python
 import asyncio
 import json
+from pathlib import Path
 
 from molq import JobSpec, asubmit
 
 
 async def main():
-    local = await asubmit("dev", "local")
+    local = await asubmit("dev", "local", project_root=Path.cwd())
 
     @local
     def hello(name):
@@ -80,7 +84,7 @@ submitted allocation. Save `job.ref` to return later. Results are dictionaries;
 request values are frozen dataclasses. All durations are seconds. SDK calls are silent; serialize returned values with
 `json.dumps(...)` for machine-readable stdout.
 
-A destination also exposes `submit(spec)`, `validate(spec)`, and `preview(spec)`;
+A destination also exposes `submit(spec, project_root=...)`, `validate(spec)`, and `preview(spec, project_root=...)`;
 all three require a `JobSpec`. `transfer(source_path, destination,
 destination_path, *options)` copies a path to another destination handle with
 one rsync run. Close the destination when finished. For file I/O on a cluster,
@@ -161,7 +165,7 @@ with Molq() as mq:
         argv = prepared.wrap(
             ["python", (inputs / "simulate.py").as_posix(), sample, output.as_posix()]
         )
-        jobs.append((hpc.submit(JobSpec.argv(argv)), output))
+        jobs.append((hpc.submit(JobSpec.argv(argv), project_root=workspace), output))
 
     for job, output in jobs:
         job.wait()
@@ -172,8 +176,7 @@ with Molq() as mq:
 If delivery fails, inspect the transfer error and destination before
 calling `delivery.deliver()` again. A transfer acknowledgement records the
 rsync result. Your application can verify content and publish it separately.
-Keep persistent results outside the reserved `.molq-control/` directory.
-Automatic collection and retention apply only to manifest-owned control files.
+Keep application outputs in the project paths you choose. MolQ leaves those paths intact when the job ends.
 
 ### Select named outputs with a manifest
 

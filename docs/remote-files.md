@@ -1,21 +1,14 @@
 # Files and logs
 
-Each submission gets a default working directory under
-`~/.molcrafts/molq/jobs/<directory>/`. MolQ reserves `.molq-control/`
-for its default allocation logs, generated scripts and execution receipts.
-Application files and custom Step output paths belong to the caller.
+Each submission writes default stdout and stderr beneath
+`<project_root>/.molq/jobs/<run_id>/` on the target. Shell writes its original
+launch and exit receipts there too. Slurm arrays use a separate subdirectory
+for each element. Log and receipt lifetime follows the project.
 
-When serve observes a confirmed SSH job terminal state, it copies only
-the scheduler's managed control files. It verifies the copy and commits
-a checksum receipt in `collected/<cluster-id>/` before removing the
-verified source files. Logs are read from the committed copy. A failed copy
-can resume on a later observation. Directories without an ownership
-manifest are preserved, including legacy directories.
-
-Use [a named artifact manifest](api.md#select-named-outputs-with-a-manifest)
-to retrieve user outputs explicitly. They stay at their original paths.
-See [retention](configuration.md#job-directory-retention) for when managed
-control files are deleted.
+The host can read ranges through `logs.read` or copy a full log with the
+existing rsync transfer. Use a [named artifact manifest](api.md#select-named-outputs-with-a-manifest)
+to download selected user outputs. Observing a completed job leaves all
+files on the target.
 
 ## Read job output
 

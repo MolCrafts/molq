@@ -7,10 +7,12 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestSubmitEcho(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("local POSIX target execution")
+	}
 	root := t.TempDir()
 	binary := filepath.Join(root, "molq")
 	command := exec.Command("go", "build", "-o", binary, ".")
@@ -25,7 +27,7 @@ func TestSubmitEcho(t *testing.T) {
 	if output, err := register.CombinedOutput(); err != nil {
 		t.Fatalf("register: %v\n%s", err, output)
 	}
-	submit := exec.Command(binary, "--registry", registry, "job", "submit", "local", "--", "echo", "cli")
+	submit := exec.Command(binary, "--registry", registry, "job", "submit", "local", "--project-root", root, "--", "echo", "cli")
 	output, err := submit.CombinedOutput()
 	if err != nil {
 		t.Fatalf("submit: %v\n%s", err, output)
@@ -51,6 +53,7 @@ func TestSlurmSubmitFromWorkspaceLeavesOnlyManagedLogs(t *testing.T) {
 	}
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PROJECT", work)
 	t.Setenv("SBATCH_OUTPUT", filepath.Join(work, "unwanted.out"))
 	for name, body := range map[string]string{
 		"sbatch": `#!/bin/sh
@@ -71,7 +74,7 @@ printf '123\n'
 `,
 		"squeue": `#!/bin/sh
 set -eu
-set -- "$HOME"/.molcrafts/molq/jobs/*
+set -- "$PROJECT"/.molq/jobs/*
 printf '{"jobs":[{"job_id":"123","job_state":"RUNNING","submit_time":1710000000,"current_working_directory":"%s"}]}\n' "$1"
 `,
 	} {
@@ -84,25 +87,28 @@ printf '{"jobs":[{"job_id":"123","job_state":"RUNNING","submit_time":1710000000,
 	if output, err := register.CombinedOutput(); err != nil {
 		t.Fatalf("register: %v\n%s", err, output)
 	}
-	submit := exec.Command(binary, "--registry", registry, "job", "submit", "hpc", "--spec", "@-")
+	submit := exec.Command(binary, "--registry", registry, "job", "submit", "hpc", "--project-root", work, "--spec", "@-")
 	submit.Dir = work
 	submit.Stdin = strings.NewReader(`{"execution":{"units":[{"id":"main","command":{"kind":"argv","argv":["pwd"]}}]}}`)
 	if output, err := submit.CombinedOutput(); err != nil {
 		t.Fatalf("submit: %v\n%s", err, output)
 	}
-	if entries, err := os.ReadDir(work); err != nil || len(entries) != 0 {
+	if entries, err := os.ReadDir(work); err != nil || len(entries) != 1 || entries[0].Name() != ".molq" {
 		t.Fatalf("workspace entries = %v, err = %v", entries, err)
 	}
-	jobRoot := filepath.Join(home, ".molcrafts", "molq", "jobs")
+	jobRoot := filepath.Join(work, ".molq", "jobs")
 	jobs, err := os.ReadDir(jobRoot)
 	if err != nil || len(jobs) != 1 {
 		t.Fatalf("job directories = %v, err = %v", jobs, err)
 	}
-	directory := filepath.Join(jobRoot, jobs[0].Name())
-	if entries, err := os.ReadDir(filepath.Join(directory, ".molq-control")); err != nil || len(entries) != 3 || entries[0].Name() != "owned-v1" || entries[1].Name() != "stderr" || entries[2].Name() != "stdout" {
+	directory, err := filepath.EvalSymlinks(filepath.Join(jobRoot, jobs[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries, err := os.ReadDir(directory); err != nil || len(entries) != 2 || entries[0].Name() != "stderr" || entries[1].Name() != "stdout" {
 		t.Fatalf("job files = %v, err = %v", entries, err)
 	}
-	if stdout, err := os.ReadFile(filepath.Join(directory, ".molq-control", "stdout")); err != nil || strings.TrimSpace(string(stdout)) != directory {
+	if stdout, err := os.ReadFile(filepath.Join(directory, "stdout")); err != nil || strings.TrimSpace(string(stdout)) != directory {
 		t.Fatalf("job cwd = %q, err = %v", stdout, err)
 	}
 }
@@ -153,41 +159,5 @@ func TestTransferTakesRsyncSyntax(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(destination, "skip.txt")); !os.IsNotExist(err) {
 		t.Fatalf("excluded skip.txt err = %v", err)
-	}
-}
-
-func TestPurgeKeepsUnverifiedOldJobDirectories(t *testing.T) {
-	binary, err := clientExecutable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := t.TempDir()
-	t.Setenv("HOME", filepath.Join(root, "home"))
-	registry := filepath.Join(root, "registry.db")
-	register := exec.Command(binary, "--registry", registry, "cluster", "register", "--definition", `{"name":"local","scheduler":"shell"}`)
-	if output, err := register.CombinedOutput(); err != nil {
-		t.Fatalf("register: %v\n%s", err, output)
-	}
-	const identity = "0846919e53ac493dab3608a4ce409be7"
-	directory := filepath.Join(root, "home", ".molcrafts", "molq", "jobs", identity)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-40 * 24 * time.Hour)
-	if err := os.Chtimes(directory, old, old); err != nil {
-		t.Fatal(err)
-	}
-	output, err := exec.Command(binary, "--registry", registry, "job", "purge", "local").CombinedOutput()
-	if err != nil {
-		t.Fatalf("purge: %v\n%s", err, output)
-	}
-	if !strings.Contains(string(output), `"removed":[]`) {
-		t.Fatalf("purge output = %s", output)
-	}
-	if _, err := os.Stat(directory); err != nil {
-		t.Fatalf("unverified job directory removed: %v", err)
-	}
-	if output, err := exec.Command(binary, "--registry", registry, "job", "purge", "a", "b").CombinedOutput(); err == nil {
-		t.Fatalf("purge with two clusters succeeded: %s", output)
 	}
 }

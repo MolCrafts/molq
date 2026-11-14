@@ -90,7 +90,7 @@ func (p *PBS) Render(spec map[string]any, directory string) (string, error) {
 	for _, item := range anySlice(resources["accelerators"]) {
 		chunk += ":ngpus=" + itoa(defaultInt(mapAny(item)["quantity"], 0))
 	}
-	directives := []string{"-l " + chunk, "-o " + quote(controlPath(directory, "stdout")), "-e " + quote(controlPath(directory, "stderr"))}
+	directives := []string{"-l " + chunk, "-o " + quote(path.Join(directory, "stdout")), "-e " + quote(path.Join(directory, "stderr"))}
 	if seconds, ok := AsInt(resources["time_limit_seconds"]); ok {
 		directives = append(directives, "-l walltime="+itoa(seconds/3600)+":"+two(seconds%3600/60)+":"+two(seconds%60))
 	}
@@ -118,14 +118,14 @@ func (p *PBS) Render(spec map[string]any, directory string) (string, error) {
 }
 
 func (p *PBS) Submit(ctx context.Context, spec map[string]any, directory string) (Job, error) {
-	if err := p.prepareControl(ctx, directory, nil, "stdout stderr job.sh"); err != nil {
+	if err := p.prepareRun(ctx, directory, nil); err != nil {
 		return Job{}, err
 	}
-	script, err := p.stage(ctx, spec, directory, p.Validate, p.Render)
+	script, err := p.Render(spec, directory)
 	if err != nil {
 		return Job{}, err
 	}
-	text, err := p.native(ctx, []string{"qsub", script}, true, nil, false)
+	text, err := p.nativeWithLabel(ctx, []string{"sh", "-c", stageScript + `qsub "$script"`, "sh", itoa(len(script))}, "qsub", true, []byte(script), true)
 	if err != nil {
 		return Job{}, err
 	}
@@ -136,7 +136,7 @@ func (p *PBS) Submit(ctx context.Context, spec map[string]any, directory string)
 	return p.accepted(ctx, p.QueryMany, identity)
 }
 
-func (p *PBS) QueryMany(ctx context.Context, ids []string) (map[string]Job, error) {
+func (p *PBS) QueryMany(ctx context.Context, ids []string, _ string) (map[string]Job, error) {
 	if len(ids) == 0 {
 		return map[string]Job{}, nil
 	}
@@ -147,7 +147,7 @@ func (p *PBS) QueryMany(ctx context.Context, ids []string) (map[string]Job, erro
 	return parsePBS(text, "accounting")
 }
 
-func (p *PBS) List(ctx context.Context) ([]Job, error) {
+func (p *PBS) List(ctx context.Context, _ string) ([]Job, error) {
 	text, err := p.native(ctx, []string{"sh", "-c", `qstat -f -F json -u "$(id -un)"`}, false, nil, false)
 	if err != nil {
 		return nil, err
@@ -164,7 +164,7 @@ func (p *PBS) List(ctx context.Context) ([]Job, error) {
 }
 
 func (p *PBS) History(ctx context.Context, ids []string) (map[string]Job, error) {
-	return p.QueryMany(ctx, ids)
+	return p.QueryMany(ctx, ids, "")
 }
 
 func (p *PBS) HistoryRange(context.Context, time.Time, time.Time) ([]Job, error) {
@@ -219,7 +219,7 @@ func parsePBS(text, source string) (map[string]Job, error) {
 		workdir := ""
 		if outputPath != "" {
 			workdir = path.Dir(outputPath)
-			if path.Base(workdir) == ControlDirectory {
+			if path.Base(workdir) == ".molq-control" {
 				workdir = path.Dir(workdir)
 			}
 		}

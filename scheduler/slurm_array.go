@@ -3,8 +3,6 @@ package scheduler
 import (
 	"context"
 	"maps"
-	"path"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -72,7 +70,7 @@ func (s *Slurm) acceptedArray(ctx context.Context, parent string, indices []int)
 		ids[i] = parent + "_" + itoa(index)
 	}
 	for range 4 {
-		jobs, err := s.QueryMany(ctx, ids)
+		jobs, err := s.QueryMany(ctx, ids, "")
 		if err != nil {
 			break
 		}
@@ -218,16 +216,6 @@ func slurmDiagnostic(row map[string]any, source string) map[string]any {
 		out["failed_steps"] = failures
 	}
 	return out
-}
-
-var managedSlurmIdentity = regexp.MustCompile(`^[0-9a-f]{32}$`)
-
-func managedSlurmDirectory(directory string) bool {
-	parent := path.Dir(directory)
-	if _, err := strconv.ParseUint(path.Base(directory), 10, 31); err == nil {
-		directory, parent = parent, path.Dir(parent)
-	}
-	return managedSlurmIdentity.MatchString(path.Base(directory)) && strings.HasSuffix(parent, "/"+JobRoot)
 }
 
 func slurmFailureReason(token string, row map[string]any) string {

@@ -92,7 +92,7 @@
     原生调度器已经拥有的状态不得为了方便查询而永久复制。
 
 21. **Persistence 是实现细节，不是领域模型。**
-    SQLite 只保存 Cluster registry 和 registry 身份。settings/presets 使用 JSON 或 YAML 配置文件，但不能再次演化成隐藏的 Job lifecycle database。
+    唯一的 SQLite 保存 Cluster registry、registry 身份和提交防重证据。settings/presets 使用 JSON 或 YAML 配置文件，但不能再次演化成隐藏的 Job lifecycle database。
 
 22. **Client 永远不能直接访问 Runtime 持久层。**
     Cluster/Runtime-owned config 的读取和修改必须经过公共 runtime API；client-local 连接、观察 cadence 与通知路由配置由各 client 自行加载，不属于 registry。

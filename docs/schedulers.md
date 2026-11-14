@@ -7,7 +7,7 @@ Bind a destination once, then select it with `submit("name")` or the CLI.
 ```python
 from molq import submit
 
-local = submit("local", "local")
+local = submit("local", "local", project_root=Path.cwd())
 local.close()
 ```
 
@@ -42,7 +42,7 @@ Replace the alias and account with your site's values. Paths in execution
 specs refer to the target filesystem. Sync inputs with `transfer`, then
 submit. MolQ streams the batch script to `sbatch` and passes the default working
 directory and allocation log paths as command-line options. They live in
-`~/.molcrafts/molq/jobs/<id>/` on the target. An explicit execution or unit
+`<project_root>/.molq/jobs/<run_id>/` on the target. An explicit execution or unit
 `cwd` controls where the payload runs. Use target scratch visible to the
 compute nodes for temporary payload files.
 
@@ -76,6 +76,5 @@ Read the definition and its `revision`, then pass a complete replacement to
 `--definition` and `--revision`.
 
 Rename preserves the cluster ID. Changing its scheduler or transport requires a
-new cluster. Every job directory is `~/.molcrafts/molq/jobs/<id>` on the target
-login. Removing a definition leaves native jobs running; keep the definition if
+new cluster. Removing a definition leaves native jobs running; keep the definition if
 you need to query those jobs later.

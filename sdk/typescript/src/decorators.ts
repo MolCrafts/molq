@@ -6,6 +6,7 @@ export type SubmitOptions = Partial<Omit<ClusterDefinition, "name" | "scheduler"
     token?: string;
     timeout?: number;
     registryId?: string;
+    projectRoot?: string;
 };
 /** Wrap a generator: each yielded JobSpec receives a Job or JobCollection. */
 export type Destination = Cluster & {
@@ -17,8 +18,8 @@ function invalid(message: string): MolqError {
 }
 /** Bind or select a destination; registration is explicit and never resent. */
 export async function bindDestination(mq: Molq, name: string, kind?: ClusterDefinition["scheduler"] | "local", options: SubmitOptions = {}): Promise<Destination> {
-    let cluster = mq.cluster(name);
-    const { endpoint, token, timeout, registryId, ...definition } = options;
+    let cluster = mq.cluster(name, options.projectRoot);
+    const { endpoint, token, timeout, registryId, projectRoot, ...definition } = options;
     try {
         const allowed = new Set(["transport", "defaults", "launcher", "pbs_dialect"]);
         if (Object.keys(definition).some(key => !allowed.has(key)))
@@ -47,7 +48,8 @@ export async function bindDestination(mq: Molq, name: string, kind?: ClusterDefi
                 }
             }
             else {
-                cluster = await mq.clusters.register({ name, ...expected });
+                const registered = await mq.clusters.register({ name, ...expected });
+                cluster = mq.cluster(registered.name, projectRoot);
             }
         }
         const decorate = function <Args extends unknown[], Result>(builder: (...args: Args) => Generator<JobSpec, Result, Job | JobCollection>): (...args: Args) => Promise<Result> {

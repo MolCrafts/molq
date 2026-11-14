@@ -2,7 +2,7 @@
 import {submit, JobSpec, Job, type JobCollection, type JobSpec as RequestSpec} from "@molcrafts/molq";
 
 async function types() {
-  const local = await submit("dev", "local", {registry: "registry.db"});
+  const local = await submit("dev", "local", {registry: "registry.db", projectRoot: "/project"});
   const hello = local(function* (name: string) {
     const spec: RequestSpec = JobSpec.argv(["echo", name]);
     const job = yield spec;

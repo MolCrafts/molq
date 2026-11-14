@@ -54,7 +54,7 @@ CI 用依赖规则禁止 clients/Observer import runtime services、scheduler、
 | 模式 | 调用路径 | 生命周期 |
 |---|---|---|
 | 本机无常驻程序 | native client → stdio RPC → 临时同一 runtime | 命令/Molq session结束后退出 |
-| 本机共享入口 | clients → loopback HTTP/WS → 同一 runtime | 长期API服务；不自行周期扫描 Cluster 状态，只在启动时和每 24 小时按 `job_retention_days` 清理作业目录 |
+| 本机共享入口 | clients → loopback HTTP/WS → 同一 runtime | 长期API服务；不自行周期扫描 Cluster 状态，作业文件由目标端项目所有者管理 |
 | HPC login node | clients → RPC → runtime → LocalTransport → native scheduler | 本机用户/原生 scheduler 身份；DB选实际本地磁盘 |
 | 独立管理节点 | clients → HTTPS/WSS → runtime → OpenSSH → native scheduler | SSH配置、凭据与alias属于runtime host |
 
@@ -77,17 +77,17 @@ Runtime停止不关闭用户的SSH master，也不终止已被原生 scheduler �
 | 兼容 | 1.0 之前无独立协议版本号，不提供向后兼容；opaque native IDs为string，时间RFC3339，memory_bytes十进制string |
 | Mutations | 必须request id/结果或outcome unknown；JSON-RPC batch不等于事务，get_many/cancel_many逐项result/error |
 | 核心方法 | clusters list/get/register/update/remove；jobs validate/submit/get/get_many/list/history/cancel/cancel_many/requeue/observe/purge；events subscribe；logs read；config/presets读写；schema/discover |
-| 文件能力 | `files.transfer` 是唯一的文件复制：runtime 执行一次系统 rsync，参数是调用方给出的 rsync 选项（不隐含 `-a`/`--delete`），操作数是 `{cluster?, path}`；无 cluster 即 serve 主机上的绝对路径，`CLUSTER:相对路径` 相对登录 home。`-e/--rsh`、`--rsync-path`、`-M/--remote-option` 与 daemon 选项归 Transport 所有并被拒绝；两端都远程时报错。`files.stat/list/read/write/mkdir/remove/rename/touch` 是单路径有界操作，SSH 与本地都用位置参数的 POSIX sh 脚本，前置条件失败以 `reason` 返回且 outcome 为 not_applied。`logs.read` 只读作业 stdout/stderr。每次提交的作业目录固定为目标登录 home 下 `~/.molcrafts/molq/jobs/<32位hex>/`，也是默认工作目录，保留 `.molq-control/` 存放作业脚本、默认 stdout/stderr、回执及归属清单；Cluster 不配置作业根。SSH home 每个 alias 解析一次。SSH 作业在原生终态确认后复制到 serve 主机 registry 旁的暂存目录，仅复制归属清单中的控制文件，以 SHA-256 清单提交副本，复核后逐文件移除源端；没有归属清单的旧目录及用户产物保留。中断后可从下一次观察恢复。Snapshot 的可选 `collection_state` 与原生计算终态独立。TTL 仅删除已核实原生终态的本地作业控制文件及已验证、远端清理完成的控制归档；无凭证或未完成的目录保留。`job_retention_days` 默认 30，0 关闭，`jobs.purge` 可按需执行。 |
+| 文件能力 | `files.transfer` 是唯一的文件复制接口，执行调用方参数指定的 rsync。不同 SSH 目标需显式中转。`logs.read` 按范围读取作业 stdout/stderr。`jobs.submit` 和 `jobs.preview` 接受目标端绝对路径 `project_root`，可选 `project_scope` 延续 Path 的访问边界。默认运行目录为 `<project_root>/.molq/jobs/<run_id>`，数组元素各有索引子目录。默认日志和 Shell 原始回执保留在项目内。Slurm/LSF 脚本走 stdin，PBS/Shell 仅临时暂存。观察与读日志没有自动归档或 TTL。 |
 
 `jobs.validate` 只验证 schema 内部一致性及所选 Scheduler 能否准确表示，可返回规范化 Spec 和诊断；`jobs.preview` 如提供，必须使用同一 Scheduler renderer。校验不探测资源、队列、权限或 MPI/MPS 环境，也不保证原生调度器会接受。提交时重新校验并捕获配置 revision。
 
 Slurm 通过 `sbatch` 的 stdin 提交批处理脚本。作业目录在提交前创建，`--chdir`、`--output` 和 `--error` 通过命令行指向该目录及其日志文件，优先于提交环境中的 `SBATCH_*` 设置。
-Python提供Molq/Cluster/Job/JobCollection，同步/async façades同语义。submit(name, type=None, **connection/definition) 返回 RPC-only Cluster 装饰器；asubmit 对应 async 入口。显式绑定通过 RPC 注册或验证已有目的地；仅指定名字不注册。Cluster 可直接装饰同步函数：普通函数保留返回值、不提交；generator 每次 yield JobSpec 经公共 jobs.submit RPC 提交，并收到 Job，保留 generator 的 return。装饰本身不连接服务，不序列化 Python 函数到目标，不自动 wait/retry，也没有私有 workflow 状态。AsyncCluster 的装饰结果是可 await 的函数，提交仍经同一 RPC；builder 仍为同步函数/generator。连接由 Cluster.close / AsyncCluster.close 或 Molq.close / AsyncMolq.close 显式释放，context manager 是可选语法。示意：
+Python提供Molq/Cluster/Job/JobCollection，同步/async façades同语义。submit(name, type=None, project_root=…, **connection/definition) 返回 RPC-only Cluster 装饰器；asubmit 对应 async 入口。显式绑定通过 RPC 注册或验证已有目的地；仅指定名字不注册。Cluster 可直接装饰同步函数：普通函数保留返回值、不提交；generator 每次 yield JobSpec 经公共 jobs.submit RPC 提交，并收到 Job，保留 generator 的 return。装饰本身不连接服务，不序列化 Python 函数到目标，不自动 wait/retry，也没有私有 workflow 状态。AsyncCluster 的装饰结果是可 await 的函数，提交仍经同一 RPC；builder 仍为同步函数/generator。连接由 Cluster.close / AsyncCluster.close 或 Molq.close / AsyncMolq.close 显式释放，context manager 是可选语法。示意：
 
 ```python
 from molq import JobSpec, submit
 
-cluster = submit("gpu", endpoint=endpoint, token=token)
+cluster = submit("gpu", endpoint=endpoint, token=token, project_root="/shared/project")
 
 @cluster
 def train():
@@ -229,9 +229,9 @@ cache key包括授权scope/Cluster/identity/window/filter，runtimeinstance重�
 | target scripts/logs/artifacts | 文件保留，静态manifest必要描述，无完整JobState/timeline镜像 |
 | Shell launch/process identity/exitreceipt | ShellScheduler 使用的 target 原始执行证据，不复制为通用JobStore |
 
-SQLite 只保存 schema_meta 和 clusters。settings/presets 在 ~/.molcrafts/molq/config.json 或显式 YAML 里。没有 jobs、status_transitions、event、lease、retry 表，也不因旧 jobs.db 保留镜像。
+SQLite 保存 schema_meta、clusters 和 submission_operations。settings/presets 在 ~/.molcrafts/molq/config.json 或显式 YAML 里。没有 jobs、status_transitions、event、lease、retry 表，也不因旧 jobs.db 保留镜像。
 Clients/Observer 不打开 Runtime DB。一个 registry 正常只由一个 active Runtime 服务；SQLite 短事务（如 BEGIN IMMEDIATE）、entity expected_revision 与有限 STATE_BUSY 返回保护 registry 写入，并防护意外、短暂的重叠访问，不构成多 Runtime 共享 registry 的服务保证。重叠实例的 cache/events/cursors 各自独立，不承诺 global revision 同步、跨 Runtime cache invalidation 或 event synchronization，也不建设分布式协调。需要共享这些状态的 clients 连接同一 endpoint；不同机器不共享 NFS 数据库。不在 DB 事务中执行 SSH/原生调度操作。
-JSON/YAML 是 settings/presets 的持久事实来源，经 serve 进程的 RPC 管理。没有更早的 schema 可升级。WAL 需要本地磁盘。[SQLite WAL限制](https://sqlite.org/wal.html)
+JSON/YAML 是 settings/presets 的持久事实来源，经 serve 进程的 RPC 管理。从 schema 2 升级时一次性导入散落的提交凭证。WAL 需要本地磁盘。[SQLite WAL限制](https://sqlite.org/wal.html)
 ShellScheduler 没有外部 accounting，必须有target原子launch/exitreceipt与process-startidentity，PID不可当稳定JobID；缺证据返回无法确认。receipt保留窗口可发现，active证据不能清理；不新建每Jobmonitor或target常驻agent。
 
 ### 9. Scheduler / Transport合同与资源映射（原则 28–32、45–47）
@@ -352,16 +352,15 @@ serve 进程用 Go，业务并发采用有界子进程。stdio 是协议通道�
 
 ## Query/configuration refinement
 
-SQLite 只有 schema_meta 和 clusters。配置文件默认是
-~/.molcrafts/molq/config.json，用 --config 选择另一份 JSON 或 YAML。没有更早的 schema，也不读取 MOLQ_CONFIG。
-新 config.reload 校验后替换配置并使内存观察失效；写入使用有界文件锁及原子替换。
-不提供旧 registry schema 的 migration、export/drop 或兼容路径；不兼容布局明确拒绝，保留用户原始文件。
+SQLite 增加 submission_operations。每个 request_key 的意图在原生命令前独占写入并持久提交，重放只读取已确认回执或原生证据。新请求摘要包含项目路径。升级导入旧意图和 sidecar 字节并永久保留该 key，旧 key 在新版提交时返回 CONFLICT。新运行时不读取旧作业布局。升级要求停止所有使用该数据库的旧 serve 和 stdio 进程。
+配置文件默认是 ~/.molcrafts/molq/config.json，用 --config 选择 JSON 或 YAML。升级前从配置移除 job_retention_days。
+maintenance.inspect 盘点旧归档，maintenance.prune 只删除显式选择、清单校验通过且目标端仍有完整匹配副本的条目。maintenance.prune_submissions 只删除已验证导入 SQLite 的旧凭证文件。
 
 Scheduling.comment 映射 Slurm 原生 comment 或 LSF 原生 description；PBS/Shell 不支持
 时明确拒绝。Snapshot 提供原生 name/comment、可获取的 submitted_at/started_at/ended_at，
 不存在为 null。PBS 系统 comment 不是用户 description。Slurm 只解析结构化 JSON。
 
-jobs.list 支持 canonical states 与 exact name。jobs.history 接受互斥的 cluster+refs
+jobs.list 支持 canonical states、exact name 和可选项目过滤。Shell 的列表和 Cluster 级观察必须给出项目根。jobs.history 接受互斥的 cluster+refs
 或 cluster+since/until/states/name/limit；范围默认 24h、按 ended_at [since,until)
 筛选当前目标账户终态，limit 默认100、上限1024。Slurm 实现原生 accounting 范围发现，
 其他 Scheduler 明确拒绝范围而保留 refs 查询。结果包含 query/source/freshness/coverage，

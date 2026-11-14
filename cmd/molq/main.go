@@ -98,6 +98,7 @@ func runWatch(args []string) error {
 	endpoint := flags.String("endpoint", "", "explicit RPC endpoint")
 	token := flags.String("token", "", "RPC bearer token")
 	interval := flags.Float64("interval", 0, "seconds between observations")
+	projectRoot := flags.String("project-root", "", "target project directory for Shell observations")
 	once := flags.Bool("once", false, "observe once and exit")
 	var clusters stringsFlag
 	flags.Var(&clusters, "cluster", "cluster to observe")
@@ -125,7 +126,7 @@ func runWatch(args []string) error {
 		every = time.Duration(*interval * float64(time.Second))
 	}
 	err = watch.Run(context.Background(), wire, watch.Options{
-		Interval: every, Clusters: names, NerveEndpoint: file.Client.Watch.NerveEndpoint,
+		Interval: every, Clusters: names, ProjectRoot: *projectRoot, NerveEndpoint: file.Client.Watch.NerveEndpoint,
 		Once: *once, Out: os.Stdout,
 	})
 	var reported *watch.ReportedError

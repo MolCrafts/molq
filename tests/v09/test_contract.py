@@ -16,7 +16,9 @@ def test_no_service_submit_wait_restart_and_no_job_tables(tmp_path):
     with Molq(registry=registry) as mq:
         mq.clusters.register(name="local", scheduler="shell")
         job = mq.cluster("local").submit(
-            JobSpec.argv([sys.executable, "-c", 'print("molq09")'])
+            JobSpec.argv([sys.executable, "-c", 'print("molq09")']),
+            project_root=tmp_path,
+            request_key="first",
         )
         ref = job.ref
     with Molq(registry=registry) as mq:
@@ -31,13 +33,15 @@ def test_no_service_submit_wait_restart_and_no_job_tables(tmp_path):
             r[0]
             for r in db.execute("select name from sqlite_master where type='table'")
         }
-    assert tables == {"schema_meta", "clusters"}
+    assert tables == {"schema_meta", "clusters", "submission_operations"}
 
 
 def test_unknown_cluster_is_not_local(tmp_path):
     with Molq(registry=tmp_path / "registry.db") as mq:
         with pytest.raises(MolqError) as e:
-            mq.cluster("missing").submit(JobSpec.argv(["true"]))
+            mq.cluster("missing").submit(
+                JobSpec.argv(["true"]), project_root="/project"
+            )
         assert e.value.kind == "CLUSTER_NOT_FOUND"
 
 
@@ -92,12 +96,10 @@ def test_contract_and_runtime_have_no_independent_protocol_version(tmp_path):
         assert not {"version", "protocol_version", "schema_version"} & hello.keys()
 
 
-def test_job_directory_purge_is_a_mutation_with_retention_report(tmp_path):
-    assert contract()["methods"]["jobs.purge"]["properties"].keys() == {"cluster"}
+def test_legacy_archive_maintenance_is_explicit(tmp_path):
+    methods = contract()["methods"]
+    assert "jobs.purge" not in methods
+    assert "maintenance.prune" in methods
     with Molq(registry=tmp_path / "registry.db") as mq:
         mq.clusters.register(name="local", scheduler="shell")
-        report = mq.rpc("jobs.purge")
-    assert report["retention_days"] == 30
-    assert report["partial_failure"] is False
-    assert [r["location"] for r in report["results"]] == ["target"]
-    assert report["results"][0]["removed"] == []
+        assert mq.rpc("maintenance.inspect", cluster="local") == {"entries": []}

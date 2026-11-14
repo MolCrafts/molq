@@ -179,6 +179,14 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 4096
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
         }
       },
       "required": [
@@ -733,12 +741,6 @@
         "raw_state": {
           "type": "string"
         },
-        "collection_state": {
-          "enum": [
-            "pending",
-            "committed"
-          ]
-        },
         "native_diagnostic": {
           "type": "object",
           "additionalProperties": true
@@ -1114,11 +1116,20 @@
         },
         "spec": {
           "$ref": "#/$defs/JobSpec"
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "project_scope": {
+          "type": "string",
+          "maxLength": 4096
         }
       },
       "required": [
         "cluster",
-        "spec"
+        "spec",
+        "project_root"
       ],
       "additionalProperties": false
     },
@@ -1136,11 +1147,20 @@
         "request_key": {
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "project_scope": {
+          "type": "string",
+          "maxLength": 4096
         }
       },
       "required": [
         "cluster",
-        "spec"
+        "spec",
+        "project_root"
       ],
       "additionalProperties": false
     },
@@ -1229,6 +1249,14 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 4096
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "project_scope": {
+          "type": "string",
+          "maxLength": 4096
         }
       },
       "required": [],
@@ -1240,6 +1268,14 @@
         "cluster": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 4096
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "project_scope": {
+          "type": "string",
           "maxLength": 4096
         },
         "states": {
@@ -1388,15 +1424,52 @@
       ],
       "additionalProperties": false
     },
-    "jobs.purge": {
+    "maintenance.inspect": {
       "type": "object",
       "properties": {
         "cluster": {
           "type": "string",
           "minLength": 1,
           "maxLength": 4096
+        },
+        "after": {
+          "type": "string",
+          "maxLength": 4096
         }
       },
+      "required": [
+        "cluster"
+      ],
+      "additionalProperties": false
+    },
+    "maintenance.prune": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+          },
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "cluster",
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    "maintenance.prune_submissions": {
+      "type": "object",
+      "properties": {},
       "required": [],
       "additionalProperties": false
     },

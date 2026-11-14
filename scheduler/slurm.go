@@ -174,7 +174,7 @@ func slurmLocationOptions(directory string, array bool) []string {
 	if array {
 		logs += "/%a"
 	}
-	return []string{"--chdir=" + directory, "--output=" + logs + "/" + ControlDirectory + "/stdout", "--error=" + logs + "/" + ControlDirectory + "/stderr"}
+	return []string{"--chdir=" + directory, "--output=" + logs + "/stdout", "--error=" + logs + "/stderr"}
 }
 
 func (s *Slurm) render(spec map[string]any, directives []string) (string, error) {
@@ -267,7 +267,7 @@ func (s *Slurm) Submit(ctx context.Context, spec map[string]any, directory strin
 		return Job{}, err
 	}
 	indices, _ := arrayIndices(spec)
-	if err := s.prepareControl(ctx, directory, indices, "stdout stderr"); err != nil {
+	if err := s.prepareRun(ctx, directory, indices); err != nil {
 		return Job{}, err
 	}
 	// CLI options take precedence over inherited SBATCH_* settings.
@@ -301,7 +301,7 @@ func (s *Slurm) Submit(ctx context.Context, spec map[string]any, directory strin
 	return s.accepted(ctx, s.QueryMany, identity)
 }
 
-func (s *Slurm) QueryMany(ctx context.Context, ids []string) (map[string]Job, error) {
+func (s *Slurm) QueryMany(ctx context.Context, ids []string, _ string) (map[string]Job, error) {
 	if len(ids) == 0 {
 		return map[string]Job{}, nil
 	}
@@ -346,7 +346,7 @@ func (s *Slurm) QueryMany(ctx context.Context, ids []string) (map[string]Job, er
 	return out, nil
 }
 
-func (s *Slurm) List(ctx context.Context) ([]Job, error) {
+func (s *Slurm) List(ctx context.Context, _ string) ([]Job, error) {
 	text, err := s.native(ctx, []string{"squeue", "--me", "--array", "--json"}, false, nil, false)
 	if err != nil {
 		return nil, err
@@ -419,8 +419,12 @@ func (s *Slurm) parse(text, source string) (map[string]Job, error) {
 	out := map[string]Job{}
 	for _, job := range jobs {
 		if previous, ok := out[job.NativeID]; ok && previous.Incarnation != job.Incarnation {
+			project := ""
+			if job.Workdir != nil {
+				project, _ = RunLocation(*job.Workdir)
+			}
 			if source == "accounting" && previous.Workdir != nil && job.Workdir != nil &&
-				*previous.Workdir == *job.Workdir && managedSlurmDirectory(*job.Workdir) {
+				*previous.Workdir == *job.Workdir && project != "" {
 				old, oldOK := AsInt(previous.NativeDiagnostic["restart_cnt"])
 				next, nextOK := AsInt(job.NativeDiagnostic["restart_cnt"])
 				if oldOK && nextOK {

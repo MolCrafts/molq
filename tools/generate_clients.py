@@ -105,42 +105,9 @@ ts.append(
 )
 (ROOT / "src/molq/protocol/types.py").write_text("\n".join(py) + "\n")
 (ROOT / "sdk/typescript/src/types.ts").write_text("\n".join(ts) + "\n")
-source = (
-    (ROOT / "src/molq/client/objects.py")
-    .read_text()
-    .replace(
-        "from molq.client.wire import Wire",
-        "from molq.client.async_wire import AsyncWire",
-    )
-    .replace("self._wire=Wire(", "self._wire=AsyncWire(")
-)
-for old, new in [
-    ("ClusterRegistry", "AsyncClusterRegistry"),
-    ("JobCollection", "AsyncJobCollection"),
-    ("Molq", "AsyncMolq"),
-    ("Cluster", "AsyncCluster"),
-    ("Job", "AsyncJob"),
-]:
-    source = re.sub(r"\b" + old + r"\b", new, source)
-source = (
-    source.replace("def __enter__", "def __aenter__")
-    .replace("def __exit__", "def __aexit__")
-    .replace("import time", "import time\nimport asyncio")
-)
-
-source = re.sub(r"\bWire\b", "AsyncWire", source)
-tree = ast.parse(source)
-for node in tree.body:
-    if isinstance(node, ast.FunctionDef) and node.name == "submit":
-        node.name = "asubmit"
-        node.body[0].value.value = node.body[0].value.value.replace(
-            'local = submit("dev", "local")', 'local = await asubmit("dev", "local")'
-        )
-tree.body[
-    0
-].value.value = "Generated async OOP projection; edit objects.py and regenerate."
 async_names = {
     "asubmit",
+    "_target_project",
     "invoke",
     "__aenter__",
     "__aexit__",
@@ -177,6 +144,8 @@ class MakeAsync(ast.NodeTransformer):
         node = self.generic_visit(node)
         if isinstance(node.func, ast.Attribute) and node.func.attr in {
             "rpc",
+            "definition",
+            "_target_project",
             "call",
             "connect",
             "close",
@@ -191,30 +160,43 @@ class MakeAsync(ast.NodeTransformer):
         return node
 
 
-out = ast.unparse(ast.fix_missing_locations(MakeAsync().visit(tree)))
-(ROOT / "src/molq/client/async_objects.py").write_text(out + "\n")
+projection_paths = []
+for name in ("objects", "jobs"):
+    source = (
+        (ROOT / f"src/molq/client/{name}.py")
+        .read_text()
+        .replace("molq.client.wire", "molq.client.async_wire")
+        .replace("molq.client.jobs", "molq.client.async_jobs")
+        .replace("molq.client.objects", "molq.client.async_objects")
+        .replace("def __enter__", "def __aenter__")
+        .replace("def __exit__", "def __aexit__")
+        .replace("import time", "import time\nimport asyncio")
+    )
+    for old, new in [
+        ("ClusterRegistry", "AsyncClusterRegistry"),
+        ("JobCollection", "AsyncJobCollection"),
+        ("Molq", "AsyncMolq"),
+        ("Cluster", "AsyncCluster"),
+        ("Job", "AsyncJob"),
+        ("Wire", "AsyncWire"),
+    ]:
+        source = re.sub(r"\b" + old + r"\b", new, source)
+    tree = ast.parse(source)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "submit":
+            node.name = "asubmit"
+            node.body[0].value.value = node.body[0].value.value.replace(
+                'local = submit("dev", "local",',
+                'local = await asubmit("dev", "local",',
+            )
+    tree.body[
+        0
+    ].value.value = f"Generated async OOP projection; edit {name}.py and regenerate."
+    out = ast.unparse(ast.fix_missing_locations(MakeAsync().visit(tree)))
+    generated = ROOT / f"src/molq/client/async_{name}.py"
+    generated.write_text(out + "\n")
+    projection_paths.append(str(generated))
 
-
-subprocess.run(
-    [
-        sys.executable,
-        "-m",
-        "ruff",
-        "check",
-        "--fix",
-        str(ROOT / "src/molq/protocol/types.py"),
-        str(ROOT / "src/molq/client/async_objects.py"),
-    ],
-    check=True,
-)
-subprocess.run(
-    [
-        sys.executable,
-        "-m",
-        "ruff",
-        "format",
-        str(ROOT / "src/molq/protocol/types.py"),
-        str(ROOT / "src/molq/client/async_objects.py"),
-    ],
-    check=True,
-)
+paths = [str(ROOT / "src/molq/protocol/types.py"), *projection_paths]
+subprocess.run([sys.executable, "-m", "ruff", "check", "--fix", *paths], check=True)
+subprocess.run([sys.executable, "-m", "ruff", "format", *paths], check=True)

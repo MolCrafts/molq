@@ -14,10 +14,9 @@ import (
 )
 
 var settingKinds = map[string]string{
-	"default_cluster":    "string",
-	"cache_max_age":      "number",
-	"cache_max_entries":  "int",
-	"job_retention_days": "days",
+	"default_cluster":   "string",
+	"cache_max_age":     "number",
+	"cache_max_entries": "int",
 }
 
 // Store is the serve-owned configuration file. client and serve sections are
@@ -127,18 +126,6 @@ func (s *Store) MaxAge(fallback float64) float64 {
 	defer s.mu.RUnlock()
 	value, ok := number(s.section("settings")["cache_max_age"])
 	if !ok || value <= 0 {
-		return fallback
-	}
-	return value
-}
-
-// RetentionDays reads job_retention_days, or fallback when it is absent.
-// Zero is a stored value: it disables job directory purging.
-func (s *Store) RetentionDays(fallback int) int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	value, ok := whole(s.section("settings")["job_retention_days"])
-	if !ok {
 		return fallback
 	}
 	return value
@@ -295,9 +282,6 @@ func validSetting(kind string, value any) bool {
 	case "number":
 		number, ok := number(value)
 		return ok && number > 0 && number <= 1000000
-	case "days":
-		days, ok := whole(value)
-		return ok && days >= 0 && days <= 36500
 	default:
 		return false
 	}

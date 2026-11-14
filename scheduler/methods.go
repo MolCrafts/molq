@@ -93,20 +93,12 @@ func (c *core) Requeue(context.Context, Job) error {
 	return unsupported("This scheduler does not support native requeue")
 }
 
-func (c *core) stage(ctx context.Context, spec map[string]any, directory string, validate func(map[string]any) error, render func(map[string]any, string) (string, error)) (string, error) {
-	if err := validate(spec); err != nil {
-		return "", err
-	}
-	script, err := render(spec, directory)
-	if err != nil {
-		return "", err
-	}
-	target := controlPath(directory, "job.sh")
-	if err := c.transport.Write(ctx, target, []byte(script), nil); err != nil {
-		return "", err
-	}
-	return target, nil
-}
+// stageScript receives a complete script before the target can submit it.
+const stageScript = `umask 077
+script=$(mktemp "${TMPDIR:-/tmp}/molq-script.XXXXXXXX") || exit 1
+trap 'rm -f -- "$script"' EXIT
+cat > "$script" && [ "$(wc -c < "$script" | tr -d '[:space:]')" = "$1" ] || exit 1
+`
 
 func (c *core) launch(unit map[string]any, payload string) (string, error) {
 	intent := mapAny(unit["launch"])
@@ -147,10 +139,10 @@ func (c *core) validate(spec map[string]any) error {
 	return nil
 }
 
-func (c *core) accepted(ctx context.Context, query func(context.Context, []string) (map[string]Job, error), identity string) (Job, error) {
+func (c *core) accepted(ctx context.Context, query func(context.Context, []string, string) (map[string]Job, error), identity string) (Job, error) {
 	var last error
 	for range 4 {
-		jobs, err := query(ctx, []string{identity})
+		jobs, err := query(ctx, []string{identity}, "")
 		if err != nil {
 			return Job{}, protocol.FailOutcome("OUTCOME_UNKNOWN", "Allocation accepted but native identity lookup failed", "unknown", map[string]any{"native_id": identity})
 		}

@@ -127,7 +127,7 @@ func TestListKeepsAuthenticationFailure(t *testing.T) {
 		"diagnostic": "Permission denied (keyboard-interactive).",
 		"dispatched": false,
 	})
-	_, err := NewSlurm(fake, map[string]any{}).List(context.Background())
+	_, err := NewSlurm(fake, map[string]any{}).List(context.Background(), "")
 	item, _ := err.(*protocol.Error)
 	if item == nil || item.Kind != "AUTH_REQUIRED" {
 		t.Fatalf("err=%#v", err)
@@ -138,7 +138,7 @@ func TestListKeepsAuthenticationFailure(t *testing.T) {
 }
 
 func TestQueryErrorIsNotEmpty(t *testing.T) {
-	_, err := NewPBS(script(transport.Result{ReturnCode: 1, Stderr: []byte("unavailable")}), map[string]any{}).QueryMany(context.Background(), []string{"123"})
+	_, err := NewPBS(script(transport.Result{ReturnCode: 1, Stderr: []byte("unavailable")}), map[string]any{}).QueryMany(context.Background(), []string{"123"}, "")
 	item, _ := err.(*protocol.Error)
 	if item == nil || item.Kind != "SCHEDULER_UNAVAILABLE" {
 		t.Fatalf("err=%v", err)
@@ -199,7 +199,7 @@ func TestSlurmQueueMissUsesAccounting(t *testing.T) {
 		transport.Result{ReturnCode: 1, Stderr: []byte("Invalid job id specified")},
 		`{"jobs":[{"job_id":"42","state":{"current":"COMPLETED"},"time":{"submission":1710000000,"end":1710000010},"exit_code":{"return_code":0,"signal":{"id":0}},"name":"name"}]}`,
 	)
-	jobs, err := NewSlurm(fake, map[string]any{}).QueryMany(context.Background(), []string{"42"})
+	jobs, err := NewSlurm(fake, map[string]any{}).QueryMany(context.Background(), []string{"42"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestSlurmSubmitStreamsScriptAndSetsJobPaths(t *testing.T) {
 	if fake.calls[0][0] != "sh" || fake.calls[0][4] != directory {
 		t.Fatalf("directory creation = %v", fake.calls[0])
 	}
-	want := []string{"env", "-u", "SBATCH_ARRAY_INX", "sbatch", "--parsable", "--chdir=" + directory, "--output=/target/a b%%j/job/.molq-control/stdout", "--error=/target/a b%%j/job/.molq-control/stderr", "--job-name=job.sh", "--no-requeue", "--comment", "test comment"}
+	want := []string{"env", "-u", "SBATCH_ARRAY_INX", "sbatch", "--parsable", "--chdir=" + directory, "--output=/target/a b%%j/job/stdout", "--error=/target/a b%%j/job/stderr", "--job-name=job.sh", "--no-requeue", "--comment", "test comment"}
 	if !slices.Equal(fake.calls[1], want) {
 		t.Fatalf("submission argv = %v", fake.calls[1])
 	}
@@ -292,7 +292,7 @@ func TestPBSRenderAndFinishedTruth(t *testing.T) {
 		}
 	}
 	fake := script(`{"Jobs":{"123.host":{"job_state":"F","ctime":123456,"Exit_status":0,"Output_Path":"host:/target/job/stdout"}}}`)
-	jobs, err := NewPBS(fake, map[string]any{"pbs_dialect": "openpbs"}).QueryMany(context.Background(), []string{"123.host"})
+	jobs, err := NewPBS(fake, map[string]any{"pbs_dialect": "openpbs"}).QueryMany(context.Background(), []string{"123.host"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestLSFDirectivesAndState(t *testing.T) {
 	if err != nil || !strings.Contains(scriptText, "-W 0:02") || !strings.Contains(scriptText, "-w 'exit(10)'") {
 		t.Fatalf("err=%v script=%s", err, scriptText)
 	}
-	jobs, err := NewLSF(script(`{"RECORDS":[{"JOBID":"10","STAT":"DONE","SUBMIT_TIME":"2026-10-07","EXEC_CWD":"/target/job","EXIT_CODE":"0"}]}`), map[string]any{}).QueryMany(context.Background(), []string{"10"})
+	jobs, err := NewLSF(script(`{"RECORDS":[{"JOBID":"10","STAT":"DONE","SUBMIT_TIME":"2026-10-07","EXEC_CWD":"/target/job","EXIT_CODE":"0"}]}`), map[string]any{}).QueryMany(context.Background(), []string{"10"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +351,7 @@ func TestPostAcceptanceQueryFailureRemainsUnknown(t *testing.T) {
 
 func TestLSFUsesNativeOutputPaths(t *testing.T) {
 	fake := script(`{"RECORDS":[{"JOBID":"42","STAT":"PEND","SUBMIT_TIME":"Oct 7 10:00","EXEC_CWD":"-","OUTPUT_FILE":"/target/allocation/stdout","ERROR_FILE":"/target/allocation/stderr"}]}`)
-	jobs, err := NewLSF(fake, map[string]any{}).QueryMany(context.Background(), []string{"42"})
+	jobs, err := NewLSF(fake, map[string]any{}).QueryMany(context.Background(), []string{"42"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

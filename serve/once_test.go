@@ -11,12 +11,7 @@ import (
 )
 
 func TestRequestKeyRepeatsTheSameSubmission(t *testing.T) {
-	root := t.TempDir()
-	service, err := Open(filepath.Join(root, "registry.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer service.Close()
+	service, root := projectService(t)
 	registered, err := service.Call("clusters.register", map[string]any{
 		"name": "local", "scheduler": "shell",
 	})
@@ -24,8 +19,8 @@ func TestRequestKeyRepeatsTheSameSubmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	params := map[string]any{
-		"cluster":     registered.(map[string]any)["id"],
-		"request_key": "once",
+		"cluster":      registered.(map[string]any)["id"],
+		"project_root": root, "request_key": "once",
 		"spec": map[string]any{"execution": map[string]any{"units": []any{
 			map[string]any{"id": "main", "command": map[string]any{"kind": "argv", "argv": []any{"echo", "once"}}},
 		}}},
@@ -48,12 +43,7 @@ func TestRequestKeyRepeatsTheSameSubmission(t *testing.T) {
 }
 
 func TestRequestKeyWaitsForTheInflightCall(t *testing.T) {
-	root := t.TempDir()
-	service, err := Open(filepath.Join(root, "registry.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer service.Close()
+	service, root := projectService(t)
 	registered, err := service.Call("clusters.register", map[string]any{
 		"name": "local", "scheduler": "shell",
 	})
@@ -61,7 +51,7 @@ func TestRequestKeyWaitsForTheInflightCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	params := map[string]any{
-		"cluster": registered.(map[string]any)["id"], "request_key": "parallel",
+		"cluster": registered.(map[string]any)["id"], "project_root": root, "request_key": "parallel",
 		"spec": map[string]any{"execution": map[string]any{"units": []any{
 			map[string]any{"id": "main", "command": map[string]any{"kind": "argv", "argv": []any{"echo", "parallel"}}},
 		}}},
@@ -92,13 +82,13 @@ func TestRequestKeyWaitsForTheInflightCall(t *testing.T) {
 }
 
 func TestSubmissionRecoversAfterLostNativeReply(t *testing.T) {
-	service, root := purgeService(t)
+	service, root := projectService(t)
 	id := register(t, service, map[string]any{"name": "local", "scheduler": "slurm"})
 	directory := filepath.Join(root, "registry.db")
 	native := &lostSubmissionScheduler{}
 	service.schedulers[id] = native
 	params := map[string]any{
-		"cluster": id, "request_key": "lost-reply",
+		"cluster": id, "project_root": root, "request_key": "lost-reply",
 		"spec": map[string]any{"execution": map[string]any{"units": []any{
 			map[string]any{"id": "main", "command": map[string]any{"kind": "argv", "argv": []any{"true"}}},
 		}}},

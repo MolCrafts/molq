@@ -42,8 +42,9 @@ def request(mode: str) -> JobSpec:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("native", "manual"))
+    parser.add_argument("--project-root", required=True)
     args = parser.parse_args()
-    hpc = submit("hpc")
+    hpc = submit("hpc", project_root=args.project_root)
 
     @hpc
     def train(mode):

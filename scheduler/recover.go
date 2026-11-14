@@ -27,8 +27,11 @@ func (c *core) RecoverSubmission(_ context.Context, lookup SubmissionLookup) (Jo
 }
 
 func (s *Shell) RecoverSubmission(ctx context.Context, lookup SubmissionLookup) (Job, error) {
-	id := path.Base(lookup.Directory)
-	jobs, err := s.QueryMany(ctx, []string{id})
+	project, id := RunLocation(lookup.Directory)
+	if project == "" || (lookup.NativeID != "" && lookup.NativeID != id) {
+		return Job{}, submissionUnknown(lookup.NativeID)
+	}
+	jobs, err := s.QueryMany(ctx, []string{id}, project)
 	if err == nil && jobs[id].Incarnation != "" {
 		return jobs[id], nil
 	}
@@ -43,7 +46,7 @@ func (s *Slurm) RecoverSubmission(ctx context.Context, lookup SubmissionLookup) 
 				return job, nil
 			}
 		} else {
-			jobs, err := s.QueryMany(ctx, []string{lookup.NativeID})
+			jobs, err := s.QueryMany(ctx, []string{lookup.NativeID}, "")
 			job := jobs[lookup.NativeID]
 			if err == nil && matchingSubmission([]Job{job}, lookup) {
 				return job, nil

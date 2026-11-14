@@ -81,6 +81,8 @@ defs = {
                 "pattern": "^[A-Za-z0-9][A-Za-z0-9_.;-]{0,255}$",
             },
             "incarnation": string,
+            "project_root": file_path,
+            "run_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
         },
         ["registry_id", "cluster_id", "native_id", "incarnation"],
     ),
@@ -268,7 +270,6 @@ defs.update(
                     ]
                 },
                 "raw_state": {"type": "string"},
-                "collection_state": {"enum": ["pending", "committed"]},
                 "native_diagnostic": {"type": "object", "additionalProperties": True},
                 "failure_reason": {
                     "enum": [
@@ -400,11 +401,23 @@ params = {
         {"cluster": string, "spec": ref("JobSpec")}, ["cluster", "spec"]
     ),
     "jobs.preview": obj(
-        {"cluster": string, "spec": ref("JobSpec")}, ["cluster", "spec"]
+        {
+            "cluster": string,
+            "spec": ref("JobSpec"),
+            "project_root": file_path,
+            "project_scope": file_path,
+        },
+        ["cluster", "spec", "project_root"],
     ),
     "jobs.submit": obj(
-        {"cluster": string, "spec": ref("JobSpec"), "request_key": identifier},
-        ["cluster", "spec"],
+        {
+            "cluster": string,
+            "spec": ref("JobSpec"),
+            "request_key": identifier,
+            "project_root": file_path,
+            "project_scope": file_path,
+        },
+        ["cluster", "spec", "project_root"],
     ),
     "jobs.get": obj(
         {
@@ -415,10 +428,20 @@ params = {
         ["ref"],
     ),
     "jobs.get_many": obj(query, ["refs"]),
-    "jobs.observe": obj({**query, "cluster": string, "cursor": string}),
+    "jobs.observe": obj(
+        {
+            **query,
+            "cluster": string,
+            "cursor": string,
+            "project_root": file_path,
+            "project_scope": file_path,
+        }
+    ),
     "jobs.list": obj(
         {
             "cluster": string,
+            "project_root": file_path,
+            "project_scope": file_path,
             "states": {
                 "type": "array",
                 "items": defs["JobSnapshot"]["properties"]["state"],
@@ -455,7 +478,21 @@ params = {
     "jobs.cancel": obj({"ref": ref("JobRef"), "request_key": identifier}, ["ref"]),
     "jobs.requeue": obj({"ref": ref("JobRef")}, ["ref"]),
     "jobs.cancel_many": obj({"refs": query["refs"]}, ["refs"]),
-    "jobs.purge": obj({"cluster": string}),
+    "maintenance.inspect": obj({"cluster": string, "after": file_path}, ["cluster"]),
+    "maintenance.prune": obj(
+        {
+            "cluster": string,
+            "entries": {
+                "type": "array",
+                "items": identifier,
+                "minItems": 1,
+                "maxItems": 128,
+                "uniqueItems": True,
+            },
+        },
+        ["cluster", "entries"],
+    ),
+    "maintenance.prune_submissions": obj({}),
     "logs.read": obj(
         {
             "ref": ref("JobRef"),

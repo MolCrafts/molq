@@ -32,16 +32,15 @@ Clusters:
   molq cluster remove CLUSTER --revision N
 
 Jobs:
-  molq job submit CLUSTER -- ARGV
-  molq job submit CLUSTER --spec JSON
-  molq job list CLUSTER [--state STATE] [--name NAME]
+  molq job submit CLUSTER --project-root PATH -- ARGV
+  molq job submit CLUSTER --project-root PATH --spec JSON
+  molq job list CLUSTER [--project-root PATH] [--state STATE] [--name NAME]
   molq job status --ref JSON
   molq job history CLUSTER
   molq job observe CLUSTER
   molq job cancel --ref JSON
   molq job logs --ref JSON
   molq job wait --ref JSON
-  molq job purge [CLUSTER]
 
 Files:
   molq transfer [RSYNC_OPTION...] SRC... DEST
@@ -94,19 +93,18 @@ var commandHelp = map[string]string{
   --definition is a cluster object, or @file. update and remove require the
   revision you last read. On a terminal, list prints a table; --json prints
   the JSON object.`,
-	"job": `molq job submit CLUSTER -- ARGV
-  molq job submit CLUSTER --spec JSON [--request-key KEY]
-  molq job submit CLUSTER --name TEXT --comment TEXT -- ARGV
-  molq job list CLUSTER [--state STATE] [--name NAME]
+	"job": `molq job submit CLUSTER --project-root PATH -- ARGV
+  molq job submit CLUSTER --project-root PATH --spec JSON [--request-key KEY]
+  molq job submit CLUSTER --project-root PATH --name TEXT --comment TEXT -- ARGV
+  molq job list CLUSTER [--project-root PATH] [--state STATE] [--name NAME]
   molq job status --ref JSON [--consistency live|bounded|cached]
   molq job history CLUSTER [--since TIME] [--until TIME] [--state STATE] [--name NAME] [--limit N]
   molq job history CLUSTER --refs JSON
-  molq job observe CLUSTER [--cursor TOKEN]
+  molq job observe CLUSTER [--project-root PATH] [--cursor TOKEN]
   molq job cancel --ref JSON [--request-key KEY]
   molq job requeue --ref JSON
   molq job logs --ref JSON [--stream stdout|stderr] [--offset N] [--limit N]
   molq job wait --ref JSON [--timeout SECONDS] [--interval SECONDS]
-  molq job purge [CLUSTER]
 
   CLUSTER is a name or id. list shows jobs the scheduler currently knows.
   --state may be repeated. On a terminal, list prints a table; --json prints
@@ -116,9 +114,7 @@ var commandHelp = map[string]string{
   History times are RFC3339 with a timezone. --refs cannot be combined with
   range filters. wait polls until the job is confirmed finished or the timeout
   expires; the job keeps running if this command stops. cancel asks the
-  scheduler to cancel. An accepted result is not proof the job has stopped.
-  purge deletes owned control files from verified terminal jobs and completed archives
-  older than job_retention_days (default 30; 0 disables).`,
+  scheduler to cancel. An accepted result is not proof the job has stopped.`,
 	"transfer": `molq transfer [RSYNC_OPTION...] SRC... DEST
 
   rsync syntax. SRC and DEST are CLUSTER:PATH or a local PATH, the way rsync
@@ -139,7 +135,7 @@ var commandHelp = map[string]string{
   Serve clients. Without --stdio, listen for HTTP and WebSocket.
   --host and --port override the configuration for this start.
   --stdio speaks JSON-RPC on stdin and stdout.`,
-	"watch": `molq watch [--cluster NAME] [--interval SECONDS] [--once]
+	"watch": `molq watch [--cluster NAME] [--project-root PATH] [--interval SECONDS] [--once]
   Periodically ask the serve process for changes.
   --cluster may be repeated. The interval and notification target otherwise
   come from the configuration file. When --config is omitted, that file is

@@ -9,6 +9,7 @@ paths = [
     root / "src/molq/protocol/contract.json",
     root / "src/molq/protocol/types.py",
     root / "src/molq/client/async_objects.py",
+    root / "src/molq/client/async_jobs.py",
     root / "sdk/typescript/src/types.ts",
 ]
 before = {path: path.read_bytes() for path in paths}

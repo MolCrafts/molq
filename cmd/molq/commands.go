@@ -53,7 +53,7 @@ func retiredCommand(command string) (string, bool) {
 	message, ok := map[string]string{
 		"list":     "usage: molq job list CLUSTER [--state STATE] [--name NAME]",
 		"clusters": "usage: molq cluster list|get|register|update|remove",
-		"submit":   "usage: molq job submit CLUSTER [--spec JSON | -- ARGV]",
+		"submit":   "usage: molq job submit CLUSTER --project-root PATH [--spec JSON | -- ARGV]",
 		"status":   "usage: molq job status --ref JSON",
 		"cancel":   "usage: molq job cancel --ref JSON",
 		"requeue":  "usage: molq job requeue --ref JSON",
@@ -83,7 +83,7 @@ func dispatchCommand(client *caller, command string, flags map[string][]string, 
 
 func jobCommand(client *caller, positionals []string, flags map[string][]string) (any, error) {
 	if len(positionals) == 0 {
-		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job list|submit|status|cancel|requeue|logs|wait|history|observe|purge", nil)
+		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job list|submit|status|cancel|requeue|logs|wait|history|observe", nil)
 	}
 	verb, rest := positionals[0], positionals[1:]
 	switch verb {
@@ -92,6 +92,9 @@ func jobCommand(client *caller, positionals []string, flags map[string][]string)
 			return nil, protocol.Fail("INVALID_INPUT", "usage: molq job list CLUSTER [--state STATE] [--name NAME]", nil)
 		}
 		params := map[string]any{"cluster": rest[0]}
+		if project := first(flags["--project-root"]); project != "" {
+			params["project_root"] = project
+		}
 		if states := flags["--state"]; len(states) > 0 {
 			params["states"] = anyList(states)
 		}
@@ -133,23 +136,18 @@ func jobCommand(client *caller, positionals []string, flags map[string][]string)
 			return nil, protocol.Fail("INVALID_INPUT", "usage: molq job observe CLUSTER [--cursor TOKEN]", nil)
 		}
 		params := map[string]any{"cluster": rest[0]}
+		if project := first(flags["--project-root"]); project != "" {
+			params["project_root"] = project
+		}
 		if cursor := first(flags["--cursor"]); cursor != "" {
 			params["cursor"] = cursor
 		}
 		return client.Call("jobs.observe", params)
 	case "history":
 		return historyCommand(client, rest, flags)
-	case "purge":
-		if len(rest) > 1 {
-			return nil, protocol.Fail("INVALID_INPUT", "usage: molq job purge [CLUSTER]", nil)
-		}
-		params := map[string]any{}
-		if len(rest) == 1 {
-			params["cluster"] = rest[0]
-		}
-		return client.Call("jobs.purge", params)
+
 	default:
-		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job list|submit|status|cancel|requeue|logs|wait|history|observe|purge", nil)
+		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job list|submit|status|cancel|requeue|logs|wait|history|observe", nil)
 	}
 }
 
@@ -200,7 +198,7 @@ func clusterCommand(client *caller, positionals []string, flags map[string][]str
 
 func submitCommand(client *caller, positionals []string, flags map[string][]string) (any, error) {
 	if len(positionals) == 0 {
-		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job submit CLUSTER [--spec JSON | -- ARGV]", nil)
+		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job submit CLUSTER --project-root PATH [--spec JSON | -- ARGV]", nil)
 	}
 	specText := first(flags["--spec"])
 	argv := []string{}
@@ -237,7 +235,7 @@ func submitCommand(client *caller, positionals []string, flags map[string][]stri
 		}
 		spec = body
 	}
-	params := map[string]any{"cluster": positionals[0], "spec": spec}
+	params := map[string]any{"cluster": positionals[0], "spec": spec, "project_root": first(flags["--project-root"])}
 	if key := first(flags["--request-key"]); key != "" {
 		params["request_key"] = key
 	}

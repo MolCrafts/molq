@@ -18,7 +18,7 @@ type blockingScheduler struct {
 	proceed <-chan struct{}
 }
 
-func (s *blockingScheduler) QueryMany(ctx context.Context, ids []string) (map[string]scheduler.Job, error) {
+func (s *blockingScheduler) QueryMany(ctx context.Context, ids []string, _ string) (map[string]scheduler.Job, error) {
 	s.started <- s.job.NativeID
 	select {
 	case <-s.proceed:

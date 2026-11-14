@@ -95,7 +95,7 @@ func Collection(snapshots []map[string]any, failures []map[string]any) map[strin
 func RefKey(ref map[string]any) string {
 	return string(mustJSON([]string{
 		stringField(ref["registry_id"]), stringField(ref["cluster_id"]),
-		stringField(ref["native_id"]), stringField(ref["incarnation"]),
+		stringField(ref["native_id"]), stringField(ref["incarnation"]), stringField(ref["project_root"]), stringField(ref["run_id"]),
 	}))
 }
 

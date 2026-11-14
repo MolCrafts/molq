@@ -64,6 +64,8 @@ class JobRef(TypedDict):
     cluster_id: str
     native_id: str
     incarnation: str
+    project_root: NotRequired[str]
+    run_id: NotRequired[str]
 
 
 class Dependency(TypedDict):
@@ -244,7 +246,6 @@ class JobSnapshot(TypedDict):
     freshness: Freshness
     source: Literal["queue", "accounting", "shell_receipt", "absent", "unavailable"]
     raw_state: str
-    collection_state: NotRequired[Literal["pending", "committed"]]
     native_diagnostic: NotRequired[dict[str, Any]]
     failure_reason: NotRequired[
         Literal[
@@ -378,6 +379,8 @@ class JobsPreviewParams(TypedDict):
 
     cluster: str
     spec: JobSpec
+    project_root: str
+    project_scope: NotRequired[str]
 
 
 class JobsSubmitParams(TypedDict):
@@ -386,6 +389,8 @@ class JobsSubmitParams(TypedDict):
     cluster: str
     spec: JobSpec
     request_key: NotRequired[str]
+    project_root: str
+    project_scope: NotRequired[str]
 
 
 class JobsGetParams(TypedDict):
@@ -412,12 +417,16 @@ class JobsObserveParams(TypedDict):
     max_age: NotRequired[float]
     cluster: NotRequired[str]
     cursor: NotRequired[str]
+    project_root: NotRequired[str]
+    project_scope: NotRequired[str]
 
 
 class JobsListParams(TypedDict):
     """Canonical wire shape."""
 
     cluster: str
+    project_root: NotRequired[str]
+    project_scope: NotRequired[str]
     states: NotRequired[
         list[
             Literal[
@@ -474,10 +483,24 @@ class JobsCancel_ManyParams(TypedDict):
     refs: list[JobRef]
 
 
-class JobsPurgeParams(TypedDict):
+class MaintenanceInspectParams(TypedDict):
     """Canonical wire shape."""
 
-    cluster: NotRequired[str]
+    cluster: str
+    after: NotRequired[str]
+
+
+class MaintenancePruneParams(TypedDict):
+    """Canonical wire shape."""
+
+    cluster: str
+    entries: list[str]
+
+
+class MaintenancePrune_SubmissionsParams(TypedDict):
+    """Canonical wire shape."""
+
+    pass
 
 
 class LogsReadParams(TypedDict):

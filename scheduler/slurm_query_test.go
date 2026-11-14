@@ -16,7 +16,7 @@ const slurmEmptyQueue = `{"jobs":[],"errors":[],"warnings":[{"description":"Zero
 func TestSlurmEmptyQueueWarningQueriesAccounting(t *testing.T) {
 	fake := script(slurmEmptyQueue,
 		`{"jobs":[{"job_id":"42","state":{"current":["COMPLETED"]},"time":{"submission":1710000000,"end":1710000010},"exit_code":{"return_code":{"set":true,"infinite":false,"number":0},"signal":{"id":{"set":true,"infinite":false,"number":0}}}}],"errors":[],"warnings":[]}`)
-	jobs, err := NewSlurm(fake, map[string]any{}).QueryMany(context.Background(), []string{"42"})
+	jobs, err := NewSlurm(fake, map[string]any{}).QueryMany(context.Background(), []string{"42"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestSlurmEmptyQueueWarningQueriesAccounting(t *testing.T) {
 
 func TestSlurmListEmptyQueueWarning(t *testing.T) {
 	fake := script(slurmEmptyQueue)
-	jobs, err := NewSlurm(fake, map[string]any{}).List(context.Background())
+	jobs, err := NewSlurm(fake, map[string]any{}).List(context.Background(), "")
 	if err != nil || jobs == nil || len(jobs) != 0 {
 		t.Fatalf("jobs=%v err=%v", jobs, err)
 	}
@@ -99,7 +99,7 @@ func TestSlurmGroupedPendingArrayAndAccountingIdentity(t *testing.T) {
 		`{"jobs":[{"job_id":42,"array_job_id":{"set":true,"number":42},"array_task_id":{"set":false,"number":0},"array_task_string":"0,2-4:2","job_state":["PENDING"],"submit_time":1710000000,"current_working_directory":"/target/job"}]}`,
 		`{"jobs":[{"job_id":43,"array":{"job_id":42,"task_id":{"set":true,"number":1}},"state":{"current":["OUT_OF_MEMORY"]},"time":{"submission":1710000000,"end":1710000010},"working_directory":"/target/job"}]}`,
 	)
-	jobs, err := NewSlurm(fake, nil).QueryMany(context.Background(), []string{"42_0", "42_1", "42_2", "42_4"})
+	jobs, err := NewSlurm(fake, nil).QueryMany(context.Background(), []string{"42_0", "42_1", "42_2", "42_4"}, "")
 	if err != nil || len(jobs) != 4 {
 		t.Fatalf("jobs=%v err=%v", jobs, err)
 	}
@@ -162,8 +162,8 @@ func TestSlurmFailureReasonsAndNativeDetails(t *testing.T) {
 
 func TestSlurmHistorySelectsNewerVerifiedRestart(t *testing.T) {
 	body := `{"jobs":[
-	{"job_id":42,"state":{"current":["REQUEUED"]},"time":{"submission":1710000000},"restart_cnt":0,"working_directory":"/home/me/.molcrafts/molq/jobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-	{"job_id":42,"state":{"current":["COMPLETED"]},"time":{"submission":1710000001},"restart_cnt":1,"working_directory":"/home/me/.molcrafts/molq/jobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	{"job_id":42,"state":{"current":["REQUEUED"]},"time":{"submission":1710000000},"restart_cnt":0,"working_directory":"/home/me/project/.molq/jobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	{"job_id":42,"state":{"current":["COMPLETED"]},"time":{"submission":1710000001},"restart_cnt":1,"working_directory":"/home/me/project/.molq/jobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	]}`
 	jobs, err := NewSlurm(nil, nil).parse(body, "accounting")
 	if err != nil || jobs["42"].State != "succeeded" || jobs["42"].Incarnation != "2024-03-09T16:00:01Z" {

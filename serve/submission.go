@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"time"
 
@@ -17,49 +15,38 @@ type submissionReceipt struct {
 	Fingerprint string
 	ClusterID   string
 	Revision    int
+	Binding     string
 	Lookup      scheduler.SubmissionLookup
 	Result      map[string]any
 	Failure     map[string]any
 }
 
-func (s *Service) submissionPath(key string) string {
-	return filepath.Join(filepath.Dir(s.Registry.Path), "submissions", s.Registry.ID, fingerprint("request_key", map[string]any{"key": key})+".json")
+func submissionDigest(key string) string {
+	return fingerprint("request_key", map[string]any{"key": key})
 }
 
-func (s *Service) readSubmission(key string) (submissionReceipt, error) {
+func (s *Service) readSubmission(ctx context.Context, key string) (submissionReceipt, error) {
+	body, legacy, err := s.Registry.ReadSubmission(ctx, submissionDigest(key))
 	var receipt submissionReceipt
-	name := s.submissionPath(key)
-	body, err := os.ReadFile(name)
 	if err != nil {
 		return receipt, err
+	}
+	if legacy {
+		return receipt, protocol.Fail("CONFLICT", "request_key belongs to a submission made before the project layout upgrade", nil)
 	}
 	if err := json.Unmarshal(body, &receipt); err != nil {
 		return receipt, err
 	}
-	if receipt.Fingerprint == "" || receipt.ClusterID == "" || receipt.Lookup.Directory == "" || receipt.Lookup.Since.IsZero() {
-		return receipt, fmt.Errorf("invalid submission receipt")
+	if receipt.Fingerprint == "" || receipt.Binding == "" || receipt.ClusterID == "" || receipt.Lookup.Since.IsZero() {
+		return receipt, fmt.Errorf("incomplete submission evidence")
 	}
-	body, err = os.ReadFile(name + ".result")
-	if err == nil {
-		var result submissionReceipt
-		if err := json.Unmarshal(body, &result); err != nil || result.Fingerprint != receipt.Fingerprint {
-			return receipt, fmt.Errorf("invalid submission result")
-		}
-		return result, nil
-	}
-	if !os.IsNotExist(err) {
-		return receipt, err
-	}
-	body, err = os.ReadFile(name + ".native-id")
-	if err == nil {
-		err = json.Unmarshal(body, &receipt.Lookup.NativeID)
-	} else if os.IsNotExist(err) {
-		err = nil
-	}
-	return receipt, err
+	return receipt, nil
 }
 
 func submissionStoreError(key string, err error) error {
+	if item, ok := err.(*protocol.Error); ok && item.Kind == "CONFLICT" {
+		return item
+	}
 	return protocol.FailOutcome("OUTCOME_UNKNOWN", "Cannot verify submission receipt", "unknown", map[string]any{"request_key": key, "detail": err.Error()})
 }
 
@@ -68,32 +55,28 @@ func (s *Service) submitOnce(ctx context.Context, key string, params, spec, clus
 	receipt := submissionReceipt{
 		Fingerprint: fingerprint("jobs.submit", params),
 		ClusterID:   stringField(cluster["id"]), Revision: revision,
-		Lookup: scheduler.SubmissionLookup{Directory: directory, Since: time.Now().UTC(), Name: stringField(scheduling["name"])},
+		Binding: fingerprint("submission_binding", map[string]any{"scheduler": cluster["scheduler"], "transport": clusterTransport(cluster)}),
+		Lookup:  scheduler.SubmissionLookup{Directory: directory, Since: time.Now().UTC(), Name: stringField(scheduling["name"])},
 	}
 	for _, raw := range anySlice(mapValue(scheduling["array"])["indices"]) {
 		index, _ := asInt(raw)
 		receipt.Lookup.Indices = append(receipt.Lookup.Indices, index)
 	}
 	sort.Ints(receipt.Lookup.Indices)
-	name := s.submissionPath(key)
-	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+	body, err := json.Marshal(receipt)
+	if err != nil {
 		return nil, submissionStoreError(key, err)
 	}
-	if err := syncDirectory(filepath.Dir(filepath.Dir(name))); err != nil {
+	claimed, err := s.Registry.ClaimSubmission(ctx, submissionDigest(key), body)
+	if err != nil {
 		return nil, submissionStoreError(key, err)
 	}
-	if err := syncDirectory(filepath.Dir(filepath.Dir(filepath.Dir(name)))); err != nil {
-		return nil, submissionStoreError(key, err)
-	}
-	if err := writeReceipt(name, receipt, true); err != nil {
-		// Another serve instance may have won the exclusive publication.
-		if os.IsExist(err) {
-			existing, readErr := s.readSubmission(key)
-			if readErr == nil {
-				return receiptReplay(params, existing)
-			}
+	if !claimed {
+		existing, err := s.readSubmission(ctx, key)
+		if err != nil {
+			return nil, submissionStoreError(key, err)
 		}
-		return nil, submissionStoreError(key, err)
+		return receiptReplay(params, existing)
 	}
 	job, err := item.Submit(ctx, spec, directory)
 	if err != nil {
@@ -103,23 +86,19 @@ func (s *Service) submitOnce(ctx context.Context, key string, params, spec, clus
 				receipt.Failure = failure.Data()
 			}
 		}
-		if receipt.Failure != nil {
-			if writeErr := writeReceipt(name+".result", receipt, true); writeErr != nil && !os.IsExist(writeErr) {
-				return nil, submissionStoreError(key, writeErr)
-			}
-		} else if receipt.Lookup.NativeID != "" {
-			if writeErr := writeReceipt(name+".native-id", receipt.Lookup.NativeID, true); writeErr != nil && !os.IsExist(writeErr) {
+		if receipt.Failure != nil || receipt.Lookup.NativeID != "" {
+			if writeErr := s.updateSubmission(ctx, key, receipt, receipt.Failure != nil); writeErr != nil {
 				return nil, submissionStoreError(key, writeErr)
 			}
 		}
 		return nil, err
 	}
-	result, err := s.submissionResult(cluster, job, revision)
+	result, err := s.submissionResult(cluster, job, revision, directory)
 	if err != nil {
 		return nil, submissionStoreError(key, err)
 	}
 	receipt.Result = result
-	return s.publishSubmissionResult(key, params, receipt)
+	return s.publishSubmissionResult(ctx, key, params, receipt)
 }
 
 func receiptReplay(params map[string]any, receipt submissionReceipt) (any, error) {
@@ -140,7 +119,7 @@ func (s *Service) recoverSubmission(ctx context.Context, params map[string]any, 
 		return receiptReplay(params, receipt)
 	}
 	cluster, item, err := s.cluster(receipt.ClusterID)
-	if err != nil {
+	if err != nil || fingerprint("submission_binding", map[string]any{"scheduler": cluster["scheduler"], "transport": clusterTransport(cluster)}) != receipt.Binding {
 		return receiptReplay(params, receipt)
 	}
 	release, err := s.acquire(ctx, receipt.ClusterID)
@@ -149,7 +128,7 @@ func (s *Service) recoverSubmission(ctx context.Context, params map[string]any, 
 	}
 	defer release()
 	key := stringField(params["request_key"])
-	receipt, err = s.readSubmission(key)
+	receipt, err = s.readSubmission(ctx, key)
 	if err != nil {
 		return nil, submissionStoreError(key, err)
 	}
@@ -160,25 +139,31 @@ func (s *Service) recoverSubmission(ctx context.Context, params map[string]any, 
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.submissionResult(cluster, job, receipt.Revision)
+	result, err := s.submissionResult(cluster, job, receipt.Revision, receipt.Lookup.Directory)
 	if err != nil {
 		return nil, submissionStoreError(key, err)
 	}
 	receipt.Result = result
-	return s.publishSubmissionResult(key, params, receipt)
+	return s.publishSubmissionResult(ctx, key, params, receipt)
 }
 
-func (s *Service) publishSubmissionResult(key string, params map[string]any, receipt submissionReceipt) (any, error) {
-	err := writeReceipt(s.submissionPath(key)+".result", receipt, true)
-	if os.IsExist(err) {
-		existing, readErr := s.readSubmission(key)
-		if readErr != nil {
-			return nil, submissionStoreError(key, readErr)
-		}
-		return receiptReplay(params, existing)
+func (s *Service) updateSubmission(ctx context.Context, key string, receipt submissionReceipt, final bool) error {
+	body, err := json.Marshal(receipt)
+	if err != nil {
+		return err
 	}
+	storeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return s.Registry.UpdateSubmission(storeCtx, submissionDigest(key), body, final)
+}
+
+func (s *Service) publishSubmissionResult(ctx context.Context, key string, params map[string]any, receipt submissionReceipt) (any, error) {
+	if err := s.updateSubmission(ctx, key, receipt, true); err != nil {
+		return nil, submissionStoreError(key, err)
+	}
+	existing, err := s.readSubmission(context.WithoutCancel(ctx), key)
 	if err != nil {
 		return nil, submissionStoreError(key, err)
 	}
-	return receipt.Result, nil
+	return receiptReplay(params, existing)
 }

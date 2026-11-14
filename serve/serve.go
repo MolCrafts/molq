@@ -25,8 +25,6 @@ type Service struct {
 	operations   map[string]*remembered
 	queryFlights map[string]*queryFlight
 	queryActive  int
-	collections  map[string]chan struct{}
-	homes        map[string]string
 }
 
 // UseConfig loads the serve-owned settings file. An empty path leaves settings unset.

@@ -145,7 +145,9 @@ def test_stage_once_run_twice_and_deliver_separately(tmp_path):
                     sample,
                 ]
             )
-            jobs.append((box.submit(JobSpec.argv(argv)), output, sample))
+            jobs.append(
+                (box.submit(JobSpec.argv(argv), project_root=tmp_path), output, sample)
+            )
         for job, output, sample in jobs:
             assert job.wait(timeout=15, interval=0.05)["completion"]["successful"]
             destination = Path(tmp_path / "downloads" / output.name, molq=client)

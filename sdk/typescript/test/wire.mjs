@@ -119,6 +119,8 @@ test('connection options are validated before dispatch or local fallback',async(
   for(const registryId of ['',null,42]) assert.throws(()=>new Molq({call:async()=>{},close:async()=>{}},registryId),error=>error.kind==='INVALID_INPUT');
 });
 
-test('job directory purge is a mutation', () => {
-  assert.equal(isMutation('jobs.purge'), true);
+test('explicit maintenance deletion is a mutation', () => {
+  assert.equal(isMutation('maintenance.inspect'), false);
+  assert.equal(isMutation('maintenance.prune'), true);
+  assert.equal(isMutation('maintenance.prune_submissions'), true);
 });

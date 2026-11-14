@@ -55,7 +55,7 @@ export class Molq {
     }
     async rpc<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> { await this.connect(); return this.wire.call<T>(method, params); }
     /** Select a registered destination without querying it. */
-    cluster(name: string): Cluster { return new Cluster(this, name); }
+    cluster(name: string, projectRoot?: string): Cluster { return new Cluster(this, name, projectRoot); }
     /** Reconstruct a handle from a copied, registry-qualified reference. */
     job(ref: JobRef): Job { return new Job(this, ref); }
     /** Group copied references for batch operations. */
@@ -79,7 +79,7 @@ export class ClusterRegistry {
     list(): Promise<unknown[]> { return this.molq.rpc("clusters.list"); }
 }
 export class Cluster {
-    constructor(private molq: Molq, public name: string) { }
+    constructor(private molq: Molq, public name: string, private projectRoot?: string) { }
     /** Release this connection without cancelling accepted allocations. */
     close(): Promise<void> { return this.molq.close(); }
     /** Answer one bounded SSH authentication prompt; the response is never persisted. */
@@ -101,21 +101,30 @@ export class Cluster {
         });
     }
     /** Submit one allocation or a native array. A supplied key survives restart. */
-    submit(spec: JobSpec & { scheduling?: { array?: undefined } }, requestKey?: string): Promise<Job>;
-    submit(spec: JobSpec & { scheduling: { array: NonNullable<NonNullable<JobSpec["scheduling"]>["array"]> } }, requestKey?: string): Promise<JobCollection>;
-    submit(spec: JobSpec, requestKey?: string): Promise<Job | JobCollection>;
-    async submit(spec: JobSpec, requestKey?: string): Promise<Job | JobCollection> {
+    submit(spec: JobSpec & { scheduling?: { array?: undefined } }, options?: { projectRoot?: string; requestKey?: string }): Promise<Job>;
+    submit(spec: JobSpec & { scheduling: { array: NonNullable<NonNullable<JobSpec["scheduling"]>["array"]> } }, options?: { projectRoot?: string; requestKey?: string }): Promise<JobCollection>;
+    submit(spec: JobSpec, options?: { projectRoot?: string; requestKey?: string }): Promise<Job | JobCollection>;
+    async submit(spec: JobSpec, options?: { projectRoot?: string; requestKey?: string }): Promise<Job | JobCollection> {
         checkSpec(spec);
+        const projectRoot = options?.projectRoot ?? this.projectRoot;
+        if (!projectRoot)
+            throw new MolqError({ kind: "INVALID_INPUT", message: "Submission requires project_root", outcome: "not_applied", context: {} });
+        const requestKey = options?.requestKey;
         const value = await this.molq.rpc<{ref: JobRef} | {refs: JobRef[]}>(
-            "jobs.submit", { cluster: this.name, spec, ...(requestKey ? { request_key: requestKey } : {}) });
+            "jobs.submit", { cluster: this.name, spec, project_root: projectRoot, ...(requestKey ? { request_key: requestKey } : {}) });
         return "refs" in value ? this.molq.jobs(value.refs) : this.molq.job(value.ref);
     }
     /** Validate schema and native representation without probing resources. */
     async validate(spec: RequestSpec): Promise<unknown> { checkSpec(spec); return this.molq.rpc("jobs.validate", { cluster: this.name, spec }); }
     /** Render one JobSpec without submitting an allocation. */
-    async preview(spec: RequestSpec): Promise<unknown> { checkSpec(spec); return this.molq.rpc("jobs.preview", { cluster: this.name, spec }); }
+    async preview(spec: RequestSpec, projectRoot = this.projectRoot): Promise<unknown> {
+        checkSpec(spec);
+        if (!projectRoot)
+            throw new MolqError({ kind: "INVALID_INPUT", message: "Preview requires project_root", outcome: "not_applied", context: {} });
+        return this.molq.rpc("jobs.preview", { cluster: this.name, spec, project_root: projectRoot });
+    }
     /** List results through the public RPC contract. */
-    list(filters: Omit<JobsListParams, "cluster"> = {}): Promise<Observation> { return this.molq.rpc("jobs.list", { cluster: this.name, ...filters }); }
+    list(filters: Omit<JobsListParams, "cluster"> = {}): Promise<Observation> { return this.molq.rpc("jobs.list", { cluster: this.name, ...(this.projectRoot ? { project_root: this.projectRoot } : {}), ...filters }); }
     /** Query native accounting history; coverage is returned with observations. */
     history(filters: Omit<Extract<JobsHistoryParams, {
         refs: unknown;
@@ -123,7 +132,7 @@ export class Cluster {
         since?: unknown;
     }>, "cluster"> = {}): Promise<Observation> { return this.molq.rpc("jobs.history", { cluster: this.name, ...filters }); }
     /** Read a scoped observation and cursor from the service. */
-    observe(cursor?: string): Promise<Observation> { return this.molq.rpc("jobs.observe", { cluster: this.name, ...(cursor ? { cursor } : {}) }); }
+    observe(cursor?: string, projectRoot = this.projectRoot): Promise<Observation> { return this.molq.rpc("jobs.observe", { cluster: this.name, ...(projectRoot ? { project_root: projectRoot } : {}), ...(cursor ? { cursor } : {}) }); }
 }
 export class Job {
     readonly ref: JobRef;

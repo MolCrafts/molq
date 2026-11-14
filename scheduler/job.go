@@ -15,6 +15,8 @@ type Job struct {
 	RawState         string
 	ExitCode         *int
 	Workdir          *string
+	ProjectRoot      string
+	RunID            string
 	Name             *string
 	StdoutPath       *string
 	StderrPath       *string
