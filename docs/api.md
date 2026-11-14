@@ -215,3 +215,22 @@ destination directory, including parent creation over RPC.
 After a failed download, reuse the resolved selection. Earlier copies may
 already exist, and the SDK does not reread the catalog or rerun the glob.
 The selection fixes paths and kinds. It does not snapshot file contents.
+
+### Reuse a workspace across jobs
+
+Bind a shared directory with `Workspace(Path("hpc:/shared/project/run-42", molq=mq))`.
+Construction only saves the path. Call `workspace.ensure()` explicitly to
+create it, then use `workspace.path("inputs")` and
+`workspace.path("outputs/attempt-01")` for scoped file operations. Callers
+choose a directory visible from the compute nodes.
+
+Upload with `Path.transfer`. Pass the desired working directory explicitly
+as `Execution.cwd`, or pass a workspace path to an existing Environment
+wrapper or to the program. Use `ArtifactManifest.resolve` against a
+workspace output directory to select completed files. Save the root's
+`CLUSTER:/absolute/path` spelling to reopen it with a new connection.
+
+The caller owns the directory and its files, including directories created
+by `ensure()`. Workspace has no automatic cleanup or registration. Its scope
+constrains SDK file operations. Programs using the directory as their working
+directory run with the target account's permissions.

@@ -35,6 +35,7 @@ __all__ = [
     "Job",
     "JobCollection",
     "Path",
+    "Workspace",
     "MolqError",
     "Accelerator",
     "Resources",
@@ -82,6 +83,10 @@ def __getattr__(name: str):
         from molq import artifact_manifest
 
         return getattr(artifact_manifest, name)
+    if name == "Workspace":
+        from molq.workspace import Workspace
+
+        return Workspace
     if name == "Path":
         from molq.client.path import Path
 
