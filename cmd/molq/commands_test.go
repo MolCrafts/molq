@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,6 +88,29 @@ printf '{"jobs":[{"job_id":"123","job_state":"RUNNING","submit_time":1710000000,
 	if output, err := register.CombinedOutput(); err != nil {
 		t.Fatalf("register: %v\n%s", err, output)
 	}
+	preview := exec.Command(binary, "--registry", registry, "job", "preview", "hpc", "--project-root", work,
+		"--partition", "cpu", "--account", "project-cpu", "--tasks", "2", "--cpus-per-task", "3",
+		"--memory-bytes", "1048576", "--time-limit-seconds", "120",
+		"--", "apptainer", "exec", "--", "/shared/my image.sif", "echo", "--partition")
+	output, err := preview.CombinedOutput()
+	if err != nil {
+		t.Fatalf("preview: %v\n%s", err, output)
+	}
+	var response struct{ Result struct{ Script string } }
+	if err := json.Unmarshal(output, &response); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"--partition=cpu", "--account=project-cpu", "--ntasks=2", "--cpus-per-task=3",
+		"--mem=1M", "--time=0:02:00", "'/shared/my image.sif' 'echo' '--partition'",
+	} {
+		if !strings.Contains(response.Result.Script, want) {
+			t.Errorf("preview lacks %q:\n%s", want, response.Result.Script)
+		}
+	}
+	if entries, err := os.ReadDir(work); err != nil || len(entries) != 0 {
+		t.Fatalf("preview created workspace entries = %v, err = %v", entries, err)
+	}
 	submit := exec.Command(binary, "--registry", registry, "job", "submit", "hpc", "--project-root", work, "--spec", "@-")
 	submit.Dir = work
 	submit.Stdin = strings.NewReader(`{"execution":{"units":[{"id":"main","command":{"kind":"argv","argv":["pwd"]}}]}}`)
@@ -141,7 +165,8 @@ func TestTransferTakesRsyncSyntax(t *testing.T) {
 			t.Fatalf("register %s: %v\n%s", name, err, output)
 		}
 	}
-	transfer := exec.Command(binary, "transfer", "-a", "--registry", registry, "--exclude", "skip.txt", "note.txt", "skip.txt", "to:"+filepath.Join(destination)+"/")
+	transfer := exec.Command(binary, "transfer", "-a", "--registry", registry, "--transfer-deadline", "180",
+		"--timeout=60", "--exclude", "skip.txt", "note.txt", "skip.txt", "to:"+filepath.Join(destination)+"/")
 	transfer.Dir = source
 	if err := os.WriteFile(filepath.Join(source, "skip.txt"), []byte("skipped"), 0o600); err != nil {
 		t.Fatal(err)

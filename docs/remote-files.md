@@ -35,7 +35,7 @@ write `-a` and `--delete` yourself. A trailing slash means what it means to
 rsync.
 
 ```sh
-molq transfer -av --delete --exclude build/ ./project/ hpc:/scratch/you/project/
+molq transfer --transfer-deadline 600 -av --exclude build/ ./inputs/ hpc:/shared/project/inputs/
 molq transfer -a hpc:runs/run_01/out.xyz .
 ```
 
@@ -46,7 +46,10 @@ run copies between a local path and one SSH cluster, or within one host.
 Two distinct SSH clusters require explicit local staging, as with rsync.
 `-e`/`--rsh`, `--rsync-path`, `-M`/`--remote-option` and daemon options belong
 to the cluster transport and are rejected. The result carries rsync's stdout
-under `output`, bounded to 1 MiB, and the copy has a 90 second limit.
+under `output`, bounded to 1 MiB. `--transfer-deadline SECONDS` sets MolQ's
+total copy limit from 1 to 3600 seconds (default 90). rsync's own `--timeout`
+still controls its I/O timeout. In Python, set `timeout=` on the transfer and
+allow at least 15 extra seconds on `Molq(timeout=...)` for long transfers.
 
 A destination handle keeps the same copy:
 

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from molq.environment import Environment
 
 
 def _wire(value: Any) -> Any:
@@ -154,12 +157,20 @@ class ExecutionUnit(Value):
     placement: dict[str, int] | None = None
 
     @classmethod
-    def argv(cls, id: str, argv: list[str], **kwargs: Any) -> ExecutionUnit:
+    def argv(
+        cls,
+        id: str,
+        argv: list[str],
+        *,
+        environment: Environment | None = None,
+        **kwargs: Any,
+    ) -> ExecutionUnit:
         """Construct a command without shell interpretation.
 
         Args:
             id (str): Unique unit identifier.
             argv (list[str]): Executable and its literal argument vector.
+            environment: Optional prepared environment for this command.
             **kwargs (Any): Additional ExecutionUnit constructor fields.
 
         Returns:
@@ -168,7 +179,10 @@ class ExecutionUnit(Value):
         Raises:
             TypeError: Additional fields do not match the constructor signature.
         """
-        return cls(id, {"kind": "argv", "argv": list(argv)}, **kwargs)
+        command = list(argv)
+        if environment is not None:
+            command = environment.wrap(command)
+        return cls(id, {"kind": "argv", "argv": command}, **kwargs)
 
     @classmethod
     def shell(cls, id: str, command: str, **kwargs: Any) -> ExecutionUnit:
@@ -289,6 +303,7 @@ class JobSpec(Value):
         *,
         resources: Resources | None = None,
         scheduling: Scheduling | None = None,
+        environment: Environment | None = None,
     ) -> JobSpec:
         """Construct a specification for one literal argument-vector command.
 
@@ -297,12 +312,15 @@ class JobSpec(Value):
                 the single execution unit.
             resources (Resources | None): Optional allocation budget.
             scheduling (Scheduling | None): Optional queue placement intent.
+            environment: Optional prepared environment for this command.
 
         Returns:
             JobSpec: A single-unit request without validation or defaults merging.
         """
         return cls(
-            execution=Execution((ExecutionUnit.argv("main", argv),)),
+            execution=Execution(
+                (ExecutionUnit.argv("main", argv, environment=environment),)
+            ),
             resources=resources,
             scheduling=scheduling,
         )

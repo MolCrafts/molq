@@ -112,7 +112,7 @@ func runWatch(args []string) error {
 	wire, err := newCaller(map[string][]string{
 		"--config": {*configPath}, "--registry": {*registryPath},
 		"--endpoint": {*endpoint}, "--token": {*token},
-	})
+	}, 0)
 	if err != nil {
 		return err
 	}
@@ -158,7 +158,8 @@ func peelGlobals(args []string) []string {
 			positionals = append(positionals, args[i:]...)
 			break
 		}
-		if globals[args[i]] && i+1 < len(args) {
+		transferOption := args[i] == "--transfer-deadline" && len(positionals) > 0 && positionals[0] == "transfer"
+		if (globals[args[i]] || transferOption) && i+1 < len(args) {
 			flags = append(flags, args[i], args[i+1])
 			i++
 			continue
@@ -198,7 +199,7 @@ func callRPC(args []string) error {
 	if !ok {
 		return protocol.Fail("INVALID_INPUT", "Named RPC params must be an object", nil)
 	}
-	wire, err := newCaller(flags)
+	wire, err := newCaller(flags, 0)
 	if err != nil {
 		return err
 	}

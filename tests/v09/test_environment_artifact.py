@@ -12,6 +12,7 @@ from molq import (
     CopyArtifact,
     DockerEnvironment,
     DockerMount,
+    ExecutionUnit,
     JobSpec,
     Molq,
     MolqError,
@@ -99,8 +100,16 @@ def test_apptainer_wraps_explicit_sif_and_preserves_literal_arguments():
         *command,
     ]
     assert (
-        JobSpec.argv(argv).to_wire()["execution"]["units"][0]["command"]["argv"] == argv
+        JobSpec.argv(command, environment=apptainer).to_wire()["execution"]["units"][0][
+            "command"
+        ]["argv"]
+        == argv
     )
+    assert (
+        ExecutionUnit.argv("main", command, environment=apptainer).command["argv"]
+        == argv
+    )
+    assert command == ["python", "script with spaces.py", "--name=$literal;!", ""]
 
 
 @pytest.mark.parametrize(

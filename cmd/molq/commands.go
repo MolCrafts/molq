@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,16 +21,30 @@ func runCommand(command string, args []string) error {
 	if message, ok := retiredCommand(command); ok {
 		return protocol.Fail("INVALID_INPUT", message, nil)
 	}
-	flags, positionals := splitArgs(args)
+	var flags map[string][]string
+	var positionals []string
 	if command == "transfer" {
 		flags, positionals = leadingGlobals(args)
+	} else {
+		flags, positionals = splitArgs(args)
 	}
-	wire, err := newCaller(flags)
+	seconds, err := transferDeadline(flags["--transfer-deadline"])
+	if err != nil {
+		return err
+	}
+	var timeout time.Duration
+	if seconds != 0 {
+		if command != "transfer" {
+			return protocol.Fail("INVALID_INPUT", "--transfer-deadline requires molq transfer", nil)
+		}
+		timeout = time.Duration(seconds+15) * time.Second
+	}
+	wire, err := newCaller(flags, timeout)
 	if err != nil {
 		return err
 	}
 	defer wire.Close()
-	result, err := dispatchCommand(wire, command, flags, positionals)
+	result, err := dispatchCommand(wire, command, flags, positionals, seconds)
 	if err != nil {
 		return err
 	}
@@ -66,7 +81,7 @@ func retiredCommand(command string) (string, bool) {
 	return message, ok
 }
 
-func dispatchCommand(client *caller, command string, flags map[string][]string, positionals []string) (any, error) {
+func dispatchCommand(client *caller, command string, flags map[string][]string, positionals []string, transferSeconds int) (any, error) {
 	switch command {
 	case "discover":
 		return client.Call("schema.discover", map[string]any{})
@@ -75,7 +90,7 @@ func dispatchCommand(client *caller, command string, flags map[string][]string, 
 	case "job":
 		return jobCommand(client, positionals, flags)
 	case "transfer":
-		return transferCommand(client, positionals)
+		return transferCommand(client, positionals, transferSeconds)
 	default:
 		return nil, protocol.Fail("INVALID_INPUT", "usage: molq cluster|job|transfer|discover|serve|rpc|watch|ping|health|doctor", nil)
 	}
@@ -83,7 +98,7 @@ func dispatchCommand(client *caller, command string, flags map[string][]string, 
 
 func jobCommand(client *caller, positionals []string, flags map[string][]string) (any, error) {
 	if len(positionals) == 0 {
-		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job list|submit|status|cancel|requeue|logs|wait|history|observe", nil)
+		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job list|submit|preview|status|cancel|requeue|logs|wait|history|observe", nil)
 	}
 	verb, rest := positionals[0], positionals[1:]
 	switch verb {
@@ -102,8 +117,12 @@ func jobCommand(client *caller, positionals []string, flags map[string][]string)
 			params["name"] = name
 		}
 		return client.Call("jobs.list", params)
-	case "submit":
-		return submitCommand(client, rest, flags)
+	case "submit", "preview":
+		params, err := jobSubmission(verb, rest, flags)
+		if err != nil {
+			return nil, err
+		}
+		return client.Call("jobs."+verb, params)
 	case "status":
 		ref, err := readJSON(required(flags, "--ref"))
 		if err != nil {
@@ -147,7 +166,7 @@ func jobCommand(client *caller, positionals []string, flags map[string][]string)
 		return historyCommand(client, rest, flags)
 
 	default:
-		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job list|submit|status|cancel|requeue|logs|wait|history|observe", nil)
+		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job list|submit|preview|status|cancel|requeue|logs|wait|history|observe", nil)
 	}
 }
 
@@ -196,50 +215,67 @@ func clusterCommand(client *caller, positionals []string, flags map[string][]str
 	}
 }
 
-func submitCommand(client *caller, positionals []string, flags map[string][]string) (any, error) {
-	if len(positionals) == 0 {
-		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job submit CLUSTER --project-root PATH [--spec JSON | -- ARGV]", nil)
+func jobSubmission(verb string, positionals []string, flags map[string][]string) (map[string]any, error) {
+	if len(positionals) == 0 || (len(positionals) > 1 && positionals[1] != "--") {
+		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job "+verb+" CLUSTER --project-root PATH [--spec JSON | -- ARGV]", nil)
+	}
+	scheduling := map[string]any{}
+	resources := map[string]any{}
+	for flag, values := range flags {
+		if len(values) != 1 || values[0] == "" {
+			return nil, protocol.Fail("INVALID_INPUT", "Expected exactly one option value", map[string]any{"option": flag})
+		}
+		value := values[0]
+		switch flag {
+		case "--project-root", "--request-key", "--spec", "--registry", "--config", "--endpoint", "--token":
+		case "--name", "--comment", "--partition", "--account":
+			scheduling[strings.TrimPrefix(flag, "--")] = value
+		case "--memory-bytes":
+			resources["memory_bytes"] = value
+		case "--nodes", "--tasks", "--cpus-per-task", "--time-limit-seconds":
+			n, err := strconv.Atoi(value)
+			if err != nil || n <= 0 {
+				return nil, protocol.Fail("INVALID_INPUT", "Expected a positive integer", map[string]any{"option": flag})
+			}
+			resources[strings.ReplaceAll(strings.TrimPrefix(flag, "--"), "-", "_")] = n
+		default:
+			return nil, protocol.Fail("INVALID_INPUT", "Unknown job submission option", map[string]any{"option": flag})
+		}
 	}
 	specText := first(flags["--spec"])
-	argv := []string{}
-	if len(positionals) > 1 && positionals[1] == "--" {
-		argv = positionals[2:]
-	}
-	if (specText == "") == (len(argv) == 0) {
+	if (specText != "") == (len(positionals) > 2) {
 		return nil, protocol.Fail("INVALID_INPUT", "Provide exactly one of spec or argv", nil)
 	}
-	name, comment := first(flags["--name"]), first(flags["--comment"])
-	if specText != "" && (name != "" || comment != "") {
-		return nil, protocol.Fail("INVALID_INPUT", "Name and comment belong in the spec when --spec is set", nil)
-	}
 	var spec any
-	var err error
 	if specText != "" {
-		spec, err = readJSON(specText)
+		if len(positionals) != 1 || len(scheduling)+len(resources) != 0 {
+			return nil, protocol.Fail("INVALID_INPUT", "Provide scheduling and resources in --spec", nil)
+		}
+		value, err := readJSON(specText)
 		if err != nil {
 			return nil, err
 		}
+		spec = value
 	} else {
 		body := map[string]any{"execution": map[string]any{"units": []any{
-			map[string]any{"id": "main", "command": map[string]any{"kind": "argv", "argv": anyList(argv)}},
+			map[string]any{"id": "main", "command": map[string]any{"kind": "argv", "argv": anyList(positionals[2:])}},
 		}}}
-		if name != "" || comment != "" {
-			scheduling := map[string]any{}
-			if name != "" {
-				scheduling["name"] = name
-			}
-			if comment != "" {
-				scheduling["comment"] = comment
-			}
+		if len(scheduling) > 0 {
 			body["scheduling"] = scheduling
+		}
+		if len(resources) > 0 {
+			body["resources"] = resources
 		}
 		spec = body
 	}
 	params := map[string]any{"cluster": positionals[0], "spec": spec, "project_root": first(flags["--project-root"])}
 	if key := first(flags["--request-key"]); key != "" {
+		if verb != "submit" {
+			return nil, protocol.Fail("INVALID_INPUT", "--request-key requires job submit", nil)
+		}
 		params["request_key"] = key
 	}
-	return client.Call("jobs.submit", params)
+	return params, nil
 }
 
 func historyCommand(client *caller, positionals []string, flags map[string][]string) (any, error) {
@@ -310,7 +346,7 @@ func waitCommand(client *caller, flags map[string][]string) (any, error) {
 	}
 }
 
-func newCaller(flags map[string][]string) (*caller, error) {
+func newCaller(flags map[string][]string, timeout time.Duration) (*caller, error) {
 	file, resolved, err := resolveConfig(first(flags["--config"]))
 	if err != nil {
 		return nil, err
@@ -326,7 +362,7 @@ func newCaller(flags map[string][]string) (*caller, error) {
 		Endpoint: orString(first(flags["--endpoint"]), file.Client.Endpoint),
 		Token:    orString(first(flags["--token"]), file.Client.Token),
 		Registry: orString(first(flags["--registry"]), file.Client.Registry),
-		Config:   resolved, Executable: executable,
+		Config:   resolved, Executable: executable, Timeout: timeout,
 	}), nil
 }
 
@@ -344,7 +380,7 @@ func splitArgs(args []string) (map[string][]string, []string) {
 				i++
 				continue
 			}
-			flags[args[i]] = append(flags[args[i]], "true")
+			flags[args[i]] = append(flags[args[i]], "")
 			continue
 		}
 		positionals = append(positionals, args[i])

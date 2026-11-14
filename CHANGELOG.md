@@ -2,7 +2,16 @@
 
 ## Unreleased
 
-The CLI names the object. Destinations are `molq cluster list|get|register|update|remove`. Allocations are `molq job list|submit|status|cancel|requeue|logs|wait|history|observe`. `molq list`, `molq clusters`, and the old top-level job verbs are rejected with the replacement usage. On a terminal, the two list commands print a table; a pipe, a redirect, or `--json` keeps the JSON object. `--help` is text.
+The CLI names the object. Destinations are `molq cluster list|get|register|update|remove`. Allocations are `molq job list|submit|preview|status|cancel|requeue|logs|wait|history|observe`. `molq list`, `molq clusters`, and the old top-level job verbs are rejected with the replacement usage. On a terminal, the two list commands print a table; a pipe, a redirect, or `--json` keeps the JSON object. `--help` is text.
+
+CLI argv submissions accept partition, account, and CPU resource flags.
+`job preview` renders the same job specification without submitting.
+`transfer --transfer-deadline` sets the total copy limit. In Python,
+`JobSpec.argv` and `ExecutionUnit.argv` accept a prepared Environment, and
+`Workspace.upload` and `Workspace.download` copy inputs and named outputs
+using the existing transfer path. The Arrhenius CPU harness exercises these
+operations with an explicitly selected SSH alias, project, account, partition,
+and SIF.
 
 SSH uses the alias's OpenSSH ControlPath when one is configured, so an existing ControlMaster is the connection. A private ControlPath remains the fallback. `AUTH_REQUIRED`, `TRANSPORT_UNAVAILABLE`, and `CONNECTION_TIMEOUT` from that connection stay those kinds, with the SSH diagnostic, instead of being rewritten as `SCHEDULER_UNAVAILABLE`.
 

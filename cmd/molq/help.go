@@ -34,6 +34,7 @@ Clusters:
 Jobs:
   molq job submit CLUSTER --project-root PATH -- ARGV
   molq job submit CLUSTER --project-root PATH --spec JSON
+  molq job preview CLUSTER --project-root PATH -- ARGV
   molq job list CLUSTER [--project-root PATH] [--state STATE] [--name NAME]
   molq job status --ref JSON
   molq job history CLUSTER
@@ -43,7 +44,7 @@ Jobs:
   molq job wait --ref JSON
 
 Files:
-  molq transfer [RSYNC_OPTION...] SRC... DEST
+  molq transfer [--transfer-deadline SECONDS] [RSYNC_OPTION...] SRC... DEST
 
 Process:
   molq serve           Listen for clients. Add --stdio for one local client
@@ -95,7 +96,7 @@ var commandHelp = map[string]string{
   the JSON object.`,
 	"job": `molq job submit CLUSTER --project-root PATH -- ARGV
   molq job submit CLUSTER --project-root PATH --spec JSON [--request-key KEY]
-  molq job submit CLUSTER --project-root PATH --name TEXT --comment TEXT -- ARGV
+  molq job preview CLUSTER --project-root PATH [--spec JSON | -- ARGV]
   molq job list CLUSTER [--project-root PATH] [--state STATE] [--name NAME]
   molq job status --ref JSON [--consistency live|bounded|cached]
   molq job history CLUSTER [--since TIME] [--until TIME] [--state STATE] [--name NAME] [--limit N]
@@ -108,24 +109,28 @@ var commandHelp = map[string]string{
 
   CLUSTER is a name or id. list shows jobs the scheduler currently knows.
   --state may be repeated. On a terminal, list prints a table; --json prints
-  the JSON object. Use argv or --spec, not both. --name and --comment are
-  only for argv; a spec already carries scheduling. --request-key repeats the
-  same submit across serve restarts. --ref is a JobRef object, or @file.
+  the JSON object. In argv mode, optional scheduling flags are --name,
+  --comment, --partition and --account. Resource flags are --nodes, --tasks,
+  --cpus-per-task, --memory-bytes and --time-limit-seconds. With --spec,
+  include these fields in the spec. preview renders without submitting.
+  --request-key reconciles the same submit across serve restarts.
+  --ref is a JobRef object, or @file.
   History times are RFC3339 with a timezone. --refs cannot be combined with
   range filters. wait polls until the job is confirmed finished or the timeout
   expires; the job keeps running if this command stops. cancel asks the
   scheduler to cancel. An accepted result is not proof the job has stopped.`,
-	"transfer": `molq transfer [RSYNC_OPTION...] SRC... DEST
+	"transfer": `molq transfer [--transfer-deadline SECONDS] [RSYNC_OPTION...] SRC... DEST
 
   rsync syntax. SRC and DEST are CLUSTER:PATH or a local PATH, the way rsync
   reads HOST:PATH: a colon before the first slash names a registered cluster.
   CLUSTER:relative is relative to that login's home; a local PATH is resolved
   against this shell's directory. A trailing slash is passed to rsync as is.
-  Options go to rsync unchanged; nothing is implied, so write -a or --delete
-  yourself. -e/--rsh, --rsync-path, -M/--remote-option and daemon options are
+  --transfer-deadline sets the total copy limit (1–3600 seconds, default 90).
+  rsync's own --timeout is passed through. -e/--rsh, --rsync-path,
+  -M/--remote-option and daemon options are
   owned by the cluster transport and rejected. Only one side may be remote.
 
-  molq transfer -av --delete --exclude build/ ./project/ hpc:/scratch/you/project/
+  molq transfer --transfer-deadline 600 -av ./project/ hpc:/scratch/you/project/
   molq transfer -a hpc:runs/out.xyz .`,
 	"rpc": `molq rpc METHOD [--params JSON]
   Call one public method. --params is a JSON object, @file, or @- for stdin.

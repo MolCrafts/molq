@@ -151,7 +151,8 @@ environment = ApptainerEnvironment(
 with Molq() as mq:
     job = mq.cluster("Arrhenius").submit(
         JobSpec.argv(
-            environment.wrap(["python", "/opt/sim/run.py"]),
+            ["python", "/opt/sim/run.py"],
+            environment=environment,
             scheduling=Scheduling(partition="cpu", account="your-cpu-account"),
         ),
         project_root=project,
@@ -259,13 +260,45 @@ create it, then use `workspace.path("inputs")` and
 `workspace.path("outputs/attempt-01")` for scoped file operations. Callers
 choose a directory visible from the compute nodes.
 
-Upload with `Path.transfer`. Pass the desired working directory explicitly
-as `Execution.cwd`, or pass a workspace path to an existing Environment
-wrapper or to the program. Use `ArtifactManifest.resolve` against a
-workspace output directory to select completed files. Save the root's
-`CLUSTER:/absolute/path` spelling to reopen it with a new connection.
+Call `workspace.upload` to copy into an existing parent directory. Call
+`workspace.download` to select names from a manifest and copy them to an
+existing destination directory. Both use the same rsync RPC as `Path.transfer`.
+Save the root's `CLUSTER:/absolute/path` spelling to reopen it with a new
+connection and download outputs later.
+
+```python
+workspace.upload(Path("/local/inputs"), "inputs", "-a")
+workspace.download(
+    ArtifactManifest({"checkpoints": Catalog("catalog.json", "checkpoints")}),
+    Path("/local/downloads"),
+    relative="outputs",
+    select=("checkpoints/latest",),
+)
+```
+
+Pass a workspace path as `Execution.cwd`, an Environment mount, or a program
+argument as appropriate. `JobSpec.argv` and `ExecutionUnit.argv` accept an
+optional `environment=` that wraps argv when building the spec.
 
 The caller owns the directory and its files, including directories created
 by `ensure()`. Workspace has no automatic cleanup or registration. Its scope
 constrains SDK file operations. Programs using the directory as their working
 directory run with the target account's permissions.
+
+### Run the Arrhenius acceptance harness
+
+Provide a registered SSH alias, a cluster name for an isolated test registry,
+an existing shared project directory, the intended CPU partition and account,
+and a prepared SIF with `/bin/sh`.
+
+```sh
+uv run python tools/check_arrhenius.py \
+  --ssh-alias "$SSH_ALIAS" --cluster "$CLUSTER" --project-root "$PROJECT" \
+  --partition "$PARTITION" --account "$ACCOUNT" --sif "$SIF"
+```
+
+The harness creates a unique subdirectory and submits one short CPU job. It
+compares the SDK and CLI previews, checks logs from a new connection, and
+verifies that named download copies just one output. Its JSON result gives
+the job reference and both evidence locations. The workspace and local
+registry remain available for inspection, including after a wait timeout.
