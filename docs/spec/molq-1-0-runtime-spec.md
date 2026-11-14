@@ -76,7 +76,7 @@ Runtime停止不关闭用户的SSH master，也不终止已被原生 scheduler �
 | 身份 | runtime认证与RequestContext，所有 registry/cache/Scheduler 操作先授权；首发一个OS/HPC身份对应一个runtime实例 |
 | 兼容 | 1.0 之前无独立协议版本号，不提供向后兼容；opaque native IDs为string，时间RFC3339，memory_bytes十进制string |
 | Mutations | 必须request id/结果或outcome unknown；JSON-RPC batch不等于事务，get_many/cancel_many逐项result/error |
-| 核心方法 | clusters list/get/register/update/remove；jobs validate/submit/get/get_many/list/history/cancel/cancel_many/observe/purge；events subscribe；logs read；config/presets读写；schema/discover |
+| 核心方法 | clusters list/get/register/update/remove；jobs validate/submit/get/get_many/list/history/cancel/cancel_many/requeue/observe/purge；events subscribe；logs read；config/presets读写；schema/discover |
 | 文件能力 | `files.transfer` 是唯一的文件复制：runtime 执行一次系统 rsync，参数是调用方给出的 rsync 选项（不隐含 `-a`/`--delete`），操作数是 `{cluster?, path}`；无 cluster 即 serve 主机上的绝对路径，`CLUSTER:相对路径` 相对登录 home。`-e/--rsh`、`--rsync-path`、`-M/--remote-option` 与 daemon 选项归 Transport 所有并被拒绝；两端都远程时报错。`files.stat/list/read/write/mkdir/remove/rename/touch` 是单路径有界操作，SSH 与本地都用位置参数的 POSIX sh 脚本，前置条件失败以 `reason` 返回且 outcome 为 not_applied。`logs.read` 只读作业 stdout/stderr。每次提交的作业目录固定为目标登录 home 下 `~/.molcrafts/molq/jobs/<32位hex>/`，只放作业脚本、stdout/stderr 和回执，也是默认工作目录；Cluster 不配置作业根。SSH home 每个 alias 解析一次。SSH 作业在原生终态确认后复制到 serve 主机 registry 旁的暂存目录，校验整个目录树并以 SHA-256 清单提交副本，复核后才移除源端。中断后可从下一次观察恢复。Snapshot 的可选 `collection_state` 与原生计算终态独立。TTL 检查整棵目录树，只删除原生终态与目录身份均核实的本地作业及已验证、远端清理完成的归档；无凭证或未完成的目录保留。`job_retention_days` 默认 30，0 关闭，`jobs.purge` 可按需执行。 |
 
 `jobs.validate` 只验证 schema 内部一致性及所选 Scheduler 能否准确表示，可返回规范化 Spec 和诊断；`jobs.preview` 如提供，必须使用同一 Scheduler renderer。校验不探测资源、队列、权限或 MPI/MPS 环境，也不保证原生调度器会接受。提交时重新校验并捕获配置 revision。

@@ -160,6 +160,7 @@ async_names = {
     "observe",
     "status",
     "cancel",
+    "requeue",
     "wait",
     "logs",
 }

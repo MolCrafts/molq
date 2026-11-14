@@ -201,6 +201,11 @@ func (s *Slurm) render(spec map[string]any, directives []string) (string, error)
 		name = "job.sh"
 	}
 	directives = append(directives, "--job-name="+name)
+	if scheduling["requeue"] == true {
+		directives = append(directives, "--requeue")
+	} else {
+		directives = append(directives, "--no-requeue")
+	}
 	for _, pair := range []struct{ field, flag string }{{"partition", "partition"}, {"account", "account"}, {"qos", "qos"}, {"reservation", "reservation"}} {
 		if value, ok := scheduling[pair.field].(string); ok && value != "" {
 			directives = append(directives, "--"+pair.flag+"="+value)
@@ -282,7 +287,11 @@ func (s *Slurm) Submit(ctx context.Context, spec map[string]any, directory strin
 	if name == "" {
 		name = "job.sh"
 	}
-	argv = append(argv, "--job-name="+name, "--no-requeue")
+	requeueFlag := "--no-requeue"
+	if mapAny(spec["scheduling"])["requeue"] == true {
+		requeueFlag = "--requeue"
+	}
+	argv = append(argv, "--job-name="+name, requeueFlag)
 	if len(indices) != 0 {
 		argv = append(argv, "--array="+arrayOption(spec, indices))
 	}
@@ -368,7 +377,7 @@ func (s *Slurm) History(ctx context.Context, ids []string) (map[string]Job, erro
 	if len(ids) == 0 {
 		return map[string]Job{}, nil
 	}
-	text, err := s.native(ctx, []string{"sacct", "--allocations", "--json", "--duplicates", "--jobs", strings.Join(ids, ",")}, false, nil, false)
+	text, err := s.native(ctx, []string{"sacct", "--json", "--duplicates", "--jobs", strings.Join(ids, ",")}, false, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -402,6 +411,17 @@ func (s *Slurm) Cancel(ctx context.Context, job Job) (map[string]any, error) {
 	return map[string]any{"outcome": "accepted"}, nil
 }
 
+func (s *Slurm) Requeue(ctx context.Context, job Job) error {
+	if job.Source != "queue" || (job.RawState != "RUNNING" && job.RawState != "CONFIGURING" && job.RawState != "STOPPED" && job.RawState != "SUSPENDED") {
+		return protocol.Fail("REQUEUE_REJECTED", "Requeue requires an incomplete Slurm job in the live queue", nil)
+	}
+	_, err := s.native(ctx, []string{"scontrol", "requeue", "Incomplete", job.NativeID}, true, nil, false)
+	if failure, ok := err.(*protocol.Error); ok && failure.Kind == "SUBMISSION_REJECTED" {
+		return protocol.Fail("REQUEUE_REJECTED", "Native requeue rejected", failure.Context)
+	}
+	return err
+}
+
 func (s *Slurm) parse(text, source string) (map[string]Job, error) {
 	jobs, err := parseSlurmJobs(text, source)
 	if err != nil {
@@ -410,6 +430,20 @@ func (s *Slurm) parse(text, source string) (map[string]Job, error) {
 	out := map[string]Job{}
 	for _, job := range jobs {
 		if previous, ok := out[job.NativeID]; ok && previous.Incarnation != job.Incarnation {
+			if source == "accounting" && previous.Workdir != nil && job.Workdir != nil &&
+				*previous.Workdir == *job.Workdir && managedSlurmDirectory(*job.Workdir) {
+				old, oldOK := AsInt(previous.NativeDiagnostic["restart_cnt"])
+				next, nextOK := AsInt(job.NativeDiagnostic["restart_cnt"])
+				if oldOK && nextOK {
+					if next > old && job.Incarnation > previous.Incarnation {
+						out[job.NativeID] = job
+						continue
+					}
+					if next < old && job.Incarnation < previous.Incarnation {
+						continue
+					}
+				}
+			}
 			return nil, protocol.Fail("JOB_IDENTITY_UNVERIFIABLE", "Multiple incarnations match native ID; use historical range query", nil)
 		}
 		out[job.NativeID] = job
@@ -544,8 +578,8 @@ func slurmJob(row map[string]any, source string) (Job, error) {
 		NativeID: identity, Incarnation: incarnation, State: state, Source: source, RawState: raw,
 		ExitCode: exitCode, Workdir: strPtr(workdir), Name: strPtr(stringField(row["name"])),
 		StdoutPath: strPtr(stdout), StderrPath: strPtr(stderr),
-		FailureReason: slurmFailureReasons[token],
-		Comment:       commentPtr, SubmittedAt: submitted, StartedAt: started, EndedAt: ended,
+		FailureReason: slurmFailureReason(token, row), NativeDiagnostic: slurmDiagnostic(row, source),
+		Comment: commentPtr, SubmittedAt: submitted, StartedAt: started, EndedAt: ended,
 	}, nil
 }
 

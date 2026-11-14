@@ -97,6 +97,7 @@ class Scheduling(Value):
             a registry-qualified ref and an explicit condition: after,
             after_success, after_failure or after_started.
         array (JobArray | None): Optional native Slurm array.
+        requeue (bool | None): Opt into Slurm native requeue policy.
     """
 
     name: str | None = None
@@ -109,6 +110,7 @@ class Scheduling(Value):
     exclusive: bool | None = None
     dependencies: tuple[dict[str, Any], ...] | None = None
     array: JobArray | None = None
+    requeue: bool | None = None
 
 
 @dataclass(frozen=True)

@@ -20,6 +20,7 @@ var mutations = map[string]bool{
 	"clusters.update":   true,
 	"clusters.remove":   true,
 	"jobs.submit":       true,
+	"jobs.requeue":      true,
 	"jobs.cancel":       true,
 	"jobs.cancel_many":  true,
 	"jobs.purge":        true,

@@ -95,6 +95,8 @@ func (s *Service) dispatch(method string, params map[string]any) (any, error) {
 		return Collection(filterSnapshots(values, params), nil), nil
 	case "jobs.observe", "jobs.history":
 		return s.query(ctx, method, params)
+	case "jobs.requeue":
+		return s.mutateJob(ctx, mapValue(params["ref"]), true)
 	case "jobs.cancel", "jobs.cancel_many":
 		return s.cancel(ctx, method, params)
 	case "jobs.purge":

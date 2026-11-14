@@ -39,6 +39,9 @@ func Snapshot(ref map[string]any, job *scheduler.Job, failure map[string]any) ma
 		"name": name, "comment": comment, "submitted_at": submitted,
 		"started_at": started, "ended_at": ended,
 	}
+	if job != nil && len(job.NativeDiagnostic) > 0 {
+		result["native_diagnostic"] = job.NativeDiagnostic
+	}
 	if job != nil && job.FailureReason != "" && scheduler.Terminal(state) {
 		result["failure_reason"] = job.FailureReason
 	}

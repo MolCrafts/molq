@@ -117,6 +117,7 @@ defs = {
             "priority": {"type": "integer", "minimum": 0, "maximum": 1000000},
             "exclusive": {"type": "boolean"},
             "array": ref("JobArray"),
+            "requeue": {"type": "boolean"},
             "dependencies": {
                 "type": "array",
                 "items": ref("Dependency"),
@@ -268,6 +269,7 @@ defs.update(
                 },
                 "raw_state": {"type": "string"},
                 "collection_state": {"enum": ["pending", "committed"]},
+                "native_diagnostic": {"type": "object", "additionalProperties": True},
                 "failure_reason": {
                     "enum": [
                         "out_of_memory",
@@ -451,6 +453,7 @@ params = {
         ]
     },
     "jobs.cancel": obj({"ref": ref("JobRef"), "request_key": identifier}, ["ref"]),
+    "jobs.requeue": obj({"ref": ref("JobRef")}, ["ref"]),
     "jobs.cancel_many": obj({"refs": query["refs"]}, ["refs"]),
     "jobs.purge": obj({"cluster": string}),
     "logs.read": obj(

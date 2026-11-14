@@ -160,7 +160,7 @@ func TestQueuedCancellationIsNotApplied(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	done := make(chan error, 1)
-	go func() { _, err := service.cancelOne(ctx, refs[0]); done <- err }()
+	go func() { _, err := service.mutateJob(ctx, refs[0], false); done <- err }()
 	select {
 	case err := <-done:
 		failure, ok := err.(*protocol.Error)

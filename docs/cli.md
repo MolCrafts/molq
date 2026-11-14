@@ -60,6 +60,7 @@ molq job history hpc --refs @refs.json
 molq job observe hpc
 molq watch --cluster hpc --interval 5
 molq job purge hpc
+molq job requeue --ref @ref.json
 ```
 
 `--state` is repeatable. Slurm range history accepts `--since` and `--until` as

@@ -273,6 +273,9 @@
         "array": {
           "$ref": "#/$defs/JobArray"
         },
+        "requeue": {
+          "type": "boolean"
+        },
         "dependencies": {
           "type": "array",
           "items": {
@@ -605,6 +608,9 @@
         "exclusive": {
           "type": "boolean"
         },
+        "requeue": {
+          "type": "boolean"
+        },
         "dependencies": {
           "type": "array",
           "items": {
@@ -732,6 +738,10 @@
             "pending",
             "committed"
           ]
+        },
+        "native_diagnostic": {
+          "type": "object",
+          "additionalProperties": true
         },
         "failure_reason": {
           "enum": [
@@ -1342,6 +1352,18 @@
         "request_key": {
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false
+    },
+    "jobs.requeue": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/JobRef"
         }
       },
       "required": [

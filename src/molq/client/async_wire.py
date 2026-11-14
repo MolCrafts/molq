@@ -83,6 +83,7 @@ class AsyncWire:
             "presets.set",
             "jobs.submit",
             "jobs.cancel",
+            "jobs.requeue",
             "jobs.cancel_many",
             "jobs.purge",
             "files.transfer",

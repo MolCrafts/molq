@@ -101,7 +101,7 @@ execution plan, supply a full `JobSpec` object. Request fields use snake_case.
 | Object | Operations |
 |---|---|
 | Destination | Decorate a function; `submit`, `validate`, `preview`, `list`, `history`, `observe`, `definition`, `update`, `remove`, `close` |
-| `Job` | `status`, `wait`, `logs`, `cancel` |
+| `Job` | `status`, `wait`, `logs`, `cancel`, `requeue` |
 | `JobCollection` | `status`, `observe`, `wait`, `cancel` |
 | `Molq` | Registry, saved references, batches, direct RPC and connection lifetime |
 

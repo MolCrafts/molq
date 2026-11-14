@@ -103,6 +103,7 @@ var commandHelp = map[string]string{
   molq job history CLUSTER --refs JSON
   molq job observe CLUSTER [--cursor TOKEN]
   molq job cancel --ref JSON [--request-key KEY]
+  molq job requeue --ref JSON
   molq job logs --ref JSON [--stream stdout|stderr] [--offset N] [--limit N]
   molq job wait --ref JSON [--timeout SECONDS] [--interval SECONDS]
   molq job purge [CLUSTER]

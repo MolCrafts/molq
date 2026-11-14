@@ -90,6 +90,10 @@ func (c *core) nativeWithLabel(ctx context.Context, argv []string, command strin
 	return result.Text(), nil
 }
 
+func (c *core) Requeue(context.Context, Job) error {
+	return unsupported("This scheduler does not support native requeue")
+}
+
 func (c *core) stage(ctx context.Context, spec map[string]any, directory string, validate func(map[string]any) error, render func(map[string]any, string) (string, error)) (string, error) {
 	if err := validate(spec); err != nil {
 		return "", err
@@ -129,6 +133,9 @@ func (c *core) launch(unit map[string]any, payload string) (string, error) {
 }
 
 func (c *core) validate(spec map[string]any) error {
+	if mapAny(spec["scheduling"])["requeue"] != nil {
+		return unsupported("This scheduler cannot represent native requeue policy")
+	}
 	if mapAny(spec["scheduling"])["array"] != nil {
 		return unsupported("This scheduler cannot represent native job arrays")
 	}

@@ -165,6 +165,22 @@ memory, and CPU-only resources. Each step receives its own CPU allocation
 and a share of the requested memory proportional to its CPU count. Parallel
 MPI uses the cluster's explicit `srun` launcher.
 
+## Native Slurm requeue
+
+Set `Scheduling(requeue=True)` to opt into the site's native requeue policy.
+Use `job.requeue()` or `molq job requeue --ref @ref.json` for an explicit
+request on an incomplete Slurm job or individual array element. The native
+scheduler decides whether to accept it. Acceptance does not confirm that the
+job has restarted. Slurm may reset its submission time; use the new JobRef
+from `job list` or native history for the restarted incarnation.
+To rerun a finished array element, submit a new array with just the intended
+indices and a fresh request key.
+
+Slurm snapshots retain the raw state and native diagnostic fields. An allocation
+reported as `FAILED` can have an `out_of_memory` reason when native accounting
+shows an OOM step. The allocation's original state and the step evidence are
+both preserved.
+
 ## Job directory retention
 
 Each submission's job directory (`~/.molcrafts/molq/jobs/<id>/` on the target,

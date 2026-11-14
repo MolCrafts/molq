@@ -19,6 +19,7 @@ type Scheduler interface {
 	List(ctx context.Context) ([]Job, error)
 	History(ctx context.Context, ids []string) (map[string]Job, error)
 	HistoryRange(ctx context.Context, since, until time.Time) ([]Job, error)
+	Requeue(ctx context.Context, job Job) error
 	Cancel(ctx context.Context, job Job) (map[string]any, error)
 }
 

@@ -23,7 +23,7 @@ scheduler resources.
 | Clusters | `clusters.list`, `get`, `register`, `update`, `remove` |
 | Submission | `jobs.validate`, `preview`, `submit` |
 | State | `jobs.get`, `get_many`, `list`, `history`, `observe` |
-| Cancellation | `jobs.cancel`, `cancel_many` |
+| Native job control | `jobs.cancel`, `cancel_many`, `requeue` |
 | Retention | `jobs.purge` |
 | Events | `events.subscribe` |
 | Files | `logs.read`, `files.transfer`, `stat`, `list`, `read`, `write`, `mkdir`, `remove`, `rename`, `touch` |

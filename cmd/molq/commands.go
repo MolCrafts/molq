@@ -56,6 +56,7 @@ func retiredCommand(command string) (string, bool) {
 		"submit":   "usage: molq job submit CLUSTER [--spec JSON | -- ARGV]",
 		"status":   "usage: molq job status --ref JSON",
 		"cancel":   "usage: molq job cancel --ref JSON",
+		"requeue":  "usage: molq job requeue --ref JSON",
 		"logs":     "usage: molq job logs --ref JSON",
 		"wait":     "usage: molq job wait --ref JSON",
 		"observe":  "usage: molq job observe CLUSTER",
@@ -82,7 +83,7 @@ func dispatchCommand(client *caller, command string, flags map[string][]string, 
 
 func jobCommand(client *caller, positionals []string, flags map[string][]string) (any, error) {
 	if len(positionals) == 0 {
-		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job list|submit|status|cancel|logs|wait|history|observe|purge", nil)
+		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job list|submit|status|cancel|requeue|logs|wait|history|observe|purge", nil)
 	}
 	verb, rest := positionals[0], positionals[1:]
 	switch verb {
@@ -106,7 +107,7 @@ func jobCommand(client *caller, positionals []string, flags map[string][]string)
 			return nil, err
 		}
 		return client.Call("jobs.get", map[string]any{"ref": ref, "consistency": orString(first(flags["--consistency"]), "live")})
-	case "cancel":
+	case "cancel", "requeue":
 		ref, err := readJSON(required(flags, "--ref"))
 		if err != nil {
 			return nil, err
@@ -115,7 +116,7 @@ func jobCommand(client *caller, positionals []string, flags map[string][]string)
 		if key := first(flags["--request-key"]); key != "" {
 			params["request_key"] = key
 		}
-		return client.Call("jobs.cancel", params)
+		return client.Call("jobs."+verb, params)
 	case "logs":
 		ref, err := readJSON(required(flags, "--ref"))
 		if err != nil {
@@ -148,7 +149,7 @@ func jobCommand(client *caller, positionals []string, flags map[string][]string)
 		}
 		return client.Call("jobs.purge", params)
 	default:
-		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job list|submit|status|cancel|logs|wait|history|observe|purge", nil)
+		return nil, protocol.Fail("INVALID_INPUT", "usage: molq job list|submit|status|cancel|requeue|logs|wait|history|observe|purge", nil)
 	}
 }
 

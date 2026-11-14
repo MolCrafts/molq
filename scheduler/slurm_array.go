@@ -3,6 +3,8 @@ package scheduler
 import (
 	"context"
 	"maps"
+	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -185,4 +187,57 @@ func slurmStepMemory(resources map[string]any) (int64, error) {
 		return 0, unsupported("Parallel Slurm steps require explicit memory of at least 1 MiB per allocated CPU")
 	}
 	return memory / int64(tasks) / int64(cpus), nil
+}
+
+// slurmDiagnostic retains native reason and exit details without treating a
+// pending reason or transition flag as a terminal failure.
+func slurmDiagnostic(row map[string]any, source string) map[string]any {
+	out := map[string]any{}
+	if source == "queue" {
+		if reason := row["state_reason"]; nonempty(reason) {
+			out["reason"] = reason
+		}
+	} else if reason := mapAny(row["state"])["reason"]; nonempty(reason) {
+		out["reason"] = reason
+	}
+	for _, key := range []string{"state_description", "exit_code", "derived_exit_code", "failed_node", "system_comment", "admin_comment", "restart_cnt"} {
+		if value := row[key]; nonempty(value) {
+			out[key] = value
+		}
+	}
+	var failures []map[string]any
+	for _, value := range anySlice(row["steps"]) {
+		step := mapAny(value)
+		state := firstString(step["state"])
+		if slurmFailureReasons[state] == "" {
+			continue
+		}
+		failures = append(failures, map[string]any{"id": mapAny(step["step"])["id"], "state": step["state"], "exit_code": step["exit_code"]})
+	}
+	if len(failures) != 0 {
+		out["failed_steps"] = failures
+	}
+	return out
+}
+
+var managedSlurmIdentity = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+func managedSlurmDirectory(directory string) bool {
+	parent := path.Dir(directory)
+	if _, err := strconv.ParseUint(path.Base(directory), 10, 31); err == nil {
+		directory, parent = parent, path.Dir(parent)
+	}
+	return managedSlurmIdentity.MatchString(path.Base(directory)) && strings.HasSuffix(parent, "/"+JobRoot)
+}
+
+func slurmFailureReason(token string, row map[string]any) string {
+	if token == "FAILED" {
+		for _, value := range anySlice(row["steps"]) {
+			step := mapAny(value)
+			if firstString(step["state"]) == "OUT_OF_MEMORY" {
+				return "out_of_memory"
+			}
+		}
+	}
+	return slurmFailureReasons[token]
 }

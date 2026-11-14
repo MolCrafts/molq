@@ -131,6 +131,7 @@ export class Job {
     /** Read canonical snapshots with explicit consistency and freshness. */
     status(consistency: "live" | "bounded" | "cached" = "live", maxAge = 5): Promise<Observation> { return this.molq.rpc("jobs.get", { ref: this.ref, consistency, max_age: maxAge }); }
     /** Request native cancellation; acceptance does not confirm completion. */
+    requeue(): Promise<unknown> { return this.molq.rpc("jobs.requeue", { ref: this.ref }); }
     cancel(requestKey?: string): Promise<unknown> { return this.molq.rpc("jobs.cancel", { ref: this.ref, ...(requestKey ? { request_key: requestKey } : {}) }); }
     /** Observe until terminal completion; timeout and interval are seconds. */
     wait(timeout = 3600, interval = 1): Promise<Observation> { return this.molq.jobs([this.ref]).wait(timeout, interval); }

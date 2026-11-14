@@ -625,6 +625,14 @@ class Job:
             "jobs.get", ref=self.ref, consistency=consistency, max_age=max_age
         )
 
+    def requeue(self) -> dict:
+        """Ask Slurm to restart this incomplete job or array element.
+
+        Returns:
+            dict: Native acceptance and the reference used for the request.
+        """
+        return self.molq.rpc("jobs.requeue", ref=self.ref)
+
     def cancel(self, *, request_key: str | None = None) -> dict:
         """Request cancellation and return the native request outcome.
 

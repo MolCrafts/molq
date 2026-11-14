@@ -92,6 +92,7 @@ class Scheduling(TypedDict):
     priority: NotRequired[int]
     exclusive: NotRequired[bool]
     array: NotRequired[JobArray]
+    requeue: NotRequired[bool]
     dependencies: NotRequired[list[Dependency]]
 
 
@@ -204,6 +205,7 @@ class SchedulingDefaults(TypedDict):
     reservation: NotRequired[str]
     priority: NotRequired[int]
     exclusive: NotRequired[bool]
+    requeue: NotRequired[bool]
     dependencies: NotRequired[list[Dependency]]
 
 
@@ -243,6 +245,7 @@ class JobSnapshot(TypedDict):
     source: Literal["queue", "accounting", "shell_receipt", "absent", "unavailable"]
     raw_state: str
     collection_state: NotRequired[Literal["pending", "committed"]]
+    native_diagnostic: NotRequired[dict[str, Any]]
     failure_reason: NotRequired[
         Literal[
             "out_of_memory",
@@ -457,6 +460,12 @@ class JobsCancelParams(TypedDict):
 
     ref: JobRef
     request_key: NotRequired[str]
+
+
+class JobsRequeueParams(TypedDict):
+    """Canonical wire shape."""
+
+    ref: JobRef
 
 
 class JobsCancel_ManyParams(TypedDict):

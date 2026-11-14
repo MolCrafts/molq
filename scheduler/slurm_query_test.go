@@ -26,7 +26,7 @@ func TestSlurmEmptyQueueWarningQueriesAccounting(t *testing.T) {
 	}
 	want := [][]string{
 		{"squeue", "--array", "--json", "--jobs", "42"},
-		{"sacct", "--allocations", "--json", "--duplicates", "--jobs", "42"},
+		{"sacct", "--json", "--duplicates", "--jobs", "42"},
 	}
 	if !reflect.DeepEqual(fake.calls, want) {
 		t.Fatalf("calls=%v", fake.calls)
@@ -119,5 +119,63 @@ func TestSlurmRecoveryMatchesUniqueWorkdirAcrossQueueAndAccounting(t *testing.T)
 	job, err := NewSlurm(fake, nil).RecoverSubmission(context.Background(), SubmissionLookup{Directory: "/target/job", Since: time.Unix(1710000000, 0)})
 	if err != nil || job.NativeID != "42" {
 		t.Fatalf("job=%+v err=%v", job, err)
+	}
+}
+
+func TestSlurmRequeueOnlyIncompleteMember(t *testing.T) {
+	fake := script("")
+	native := NewSlurm(fake, nil)
+	terminal := Job{NativeID: "42_3", State: "failed", Source: "accounting", RawState: "FAILED"}
+	if err := native.Requeue(t.Context(), terminal); err == nil || len(fake.calls) != 0 {
+		t.Fatalf("terminal requeue: %v, %v", err, fake.calls)
+	}
+	active := Job{NativeID: "42_3", State: "running", Source: "queue", RawState: "RUNNING"}
+	if err := native.Requeue(t.Context(), active); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"scontrol", "requeue", "Incomplete", "42_3"}}
+	if !reflect.DeepEqual(fake.calls, want) {
+		t.Fatalf("calls = %v", fake.calls)
+	}
+}
+
+func TestSlurmFailureReasonsAndNativeDetails(t *testing.T) {
+	for _, test := range []struct{ state, reason string }{
+		{"NODE_FAIL", "node_failure"}, {"PREEMPTED", "preempted"}, {"OUT_OF_MEMORY", "out_of_memory"},
+		{"CANCELLED by 123", "cancelled"}, {"BOOT_FAIL", "boot_failure"}, {"TIMEOUT", "timeout"},
+		{"DEADLINE", "deadline"}, {"FAILED", "failed"},
+	} {
+		t.Run(test.state, func(t *testing.T) {
+			row := map[string]any{
+				"job_id": "42", "state": map[string]any{"current": []any{test.state}, "reason": "NativeReason"},
+				"failed_node": "test-node", "exit_code": map[string]any{"return_code": 0, "signal": map[string]any{"id": 9}},
+			}
+			job, err := slurmJob(row, "accounting")
+			if err != nil || !Terminal(job.State) || job.RawState != test.state || job.FailureReason != test.reason ||
+				job.NativeDiagnostic["reason"] != "NativeReason" || job.NativeDiagnostic["failed_node"] != "test-node" ||
+				job.ExitCode == nil || *job.ExitCode != 137 {
+				t.Fatalf("job=%+v err=%v", job, err)
+			}
+		})
+	}
+}
+
+func TestSlurmHistorySelectsNewerVerifiedRestart(t *testing.T) {
+	body := `{"jobs":[
+	{"job_id":42,"state":{"current":["REQUEUED"]},"time":{"submission":1710000000},"restart_cnt":0,"working_directory":"/home/me/.molcrafts/molq/jobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	{"job_id":42,"state":{"current":["COMPLETED"]},"time":{"submission":1710000001},"restart_cnt":1,"working_directory":"/home/me/.molcrafts/molq/jobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	]}`
+	jobs, err := NewSlurm(nil, nil).parse(body, "accounting")
+	if err != nil || jobs["42"].State != "succeeded" || jobs["42"].Incarnation != "2024-03-09T16:00:01Z" {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
+	}
+}
+
+func TestSlurmFailedAllocationPreservesOOMStep(t *testing.T) {
+	body := `{"jobs":[{"job_id":42,"state":{"current":["FAILED"],"reason":"None"},"steps":[{"step":{"id":"42.0"},"state":["OUT_OF_MEMORY"],"exit_code":{"signal":{"id":125}}}]}]}`
+	jobs, err := parseSlurmJobs(body, "accounting")
+	if err != nil || len(jobs) != 1 || jobs[0].RawState != "FAILED" || jobs[0].FailureReason != "out_of_memory" ||
+		len(jobs[0].NativeDiagnostic["failed_steps"].([]map[string]any)) != 1 {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
 	}
 }
