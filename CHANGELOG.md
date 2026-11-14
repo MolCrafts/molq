@@ -32,6 +32,8 @@ archives for complete duplicates before deleting local copies.
 
 `mq.Path("CLUSTER:/path")` is a `PurePosixPath` that keeps its cluster through path arithmetic and pickling, with the `molab.Path` I/O methods plus `is_symlink`, `glob`, `rglob`, `touch`, `rmdir`, `rename`, `replace` and `transfer`. Cluster I/O uses the new single-path `files.stat`, `list`, `read`, `write`, `mkdir`, `remove`, `rename` and `touch` RPCs. Protocol major is 2.
 
+`files.mkdir` masks the requested mode (default `0o777`) by the target's umask, as `pathlib.Path.mkdir` does; it used to set the mode verbatim, so every directory it created was world-writable.
+
 ## 0.9.0
 
 Breaking architecture replacement: one serve process and one RPC contract. CLI, Python sync/async SDK and the TypeScript SDK are peer clients. There is no web UI and no compatibility layer for an older API.

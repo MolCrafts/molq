@@ -32,12 +32,15 @@ for f in * .[!.]* ..?*; do
   elif [ "$l" = 1 ]; then k=missing; else continue; fi
   printf '%s %s %s\0' "$k" "$l" "$f"
 done`
+	// pathlib.Path.mkdir: the requested mode is masked by the umask, and
+	// `mkdir -m` alone would set it verbatim.
 	mkdirScript = `p=$1
+m=$(printf '%o' $(( 0$4 & ~0$(umask) )))
 if [ -d "$p" ]; then [ "$3" = 1 ] && exit 0; exit 17; fi
 { [ -e "$p" ] || [ -L "$p" ]; } && exit 17
-if [ "$2" = 1 ]; then mkdir -p -m "$4" -- "$p" || exit 1; exit 0; fi
+if [ "$2" = 1 ]; then mkdir -p -m "$m" -- "$p" || exit 1; exit 0; fi
 [ -d "$(dirname -- "$p")" ] || exit 2
-mkdir -m "$4" -- "$p" || exit 1`
+mkdir -m "$m" -- "$p" || exit 1`
 	removeScript = `p=$1
 [ -e "$p" ] || [ -L "$p" ] || exit 2
 if [ "$3" = 1 ]; then rm -rf -- "$p" || exit 1; exit 0; fi
