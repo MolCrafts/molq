@@ -2,16 +2,16 @@ package serve
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/MolCrafts/molq/protocol"
-	"github.com/MolCrafts/molq/transport"
+	"github.com/MolCrafts/molq/scheduler"
 )
 
 const (
@@ -22,22 +22,6 @@ const (
 	purgeTimeout  = 120 * time.Second
 	purgeDeadline = 10 * time.Minute
 )
-
-// purgeTree deletes job directories under $1 whose directory and immediate
-// entries were all last modified at least $2 minutes ago, and prints each
-// deleted name. Only names that are a 32-digit lowercase hexadecimal identity
-// are considered; symlinks and everything else under the root stay.
-const purgeTree = `[ -e "$1" ] || exit 0
-cd -- "$1" || exit 1
-status=0
-for name in *; do
-  case "$name" in *[!0123456789abcdef]*) continue ;; esac
-  [ "${#name}" -eq 32 ] && [ -d "$name" ] && [ ! -h "$name" ] || continue
-  recent=$(find "$name" -maxdepth 1 -mmin -"$2" -print) || { status=1; continue; }
-  [ -z "$recent" ] || continue
-  if rm -rf -- "$name"; then printf '%s\n' "$name"; else status=1; fi
-done
-exit "$status"`
 
 // RetainJobDirectories purges once now and then every interval until ctx ends.
 // Failures are reported on stderr and never stop serving.
@@ -116,11 +100,11 @@ func (s *Service) purge(ctx context.Context, name string) (map[string]any, error
 	cutoff := time.Now().Add(-time.Duration(minutes) * time.Minute)
 	results := make([]map[string]any, len(clusters)+len(archives))
 	runBatches(len(clusters), func(i int) {
-		removed, err := s.purgeTarget(ctx, clusters[i], minutes)
+		removed, err := s.purgeTarget(ctx, clusters[i], cutoff)
 		results[i] = purgeResult(stringField(clusters[i]["id"]), "target", removed, err)
 	})
 	for i, archive := range archives {
-		removed, err := purgeLocal(archive, cutoff)
+		removed, err := purgeArchive(ctx, archive, cutoff)
 		results[len(clusters)+i] = purgeResult(filepath.Base(archive), "archive", removed, err)
 	}
 	for _, result := range results {
@@ -143,35 +127,66 @@ func purgeResult(clusterID, location string, removed []string, err error) map[st
 	return result
 }
 
-// purgeTarget runs purgeTree in the Cluster's job root through its Transport,
-// holding the Cluster's native slot like any other target command.
-func (s *Service) purgeTarget(ctx context.Context, cluster map[string]any, minutes int) ([]string, error) {
+// purgeTarget only considers directories with an observed identity, then
+// queries that identity live before removing anything.
+func (s *Service) purgeTarget(ctx context.Context, cluster map[string]any, cutoff time.Time) ([]string, error) {
+	if clusterTransport(cluster)["kind"] == "ssh" {
+		// Sources are removed by the verified collection transaction.
+		return nil, nil
+	}
+	id := stringField(cluster["id"])
 	root, err := s.jobRoot(ctx, cluster)
 	if err != nil {
 		return nil, err
 	}
-	release, err := s.acquire(ctx, stringField(cluster["id"]))
+	_, item, err := s.cluster(id)
 	if err != nil {
 		return nil, err
 	}
-	defer release()
-	result, err := transport.Create(clusterTransport(cluster)).Run(ctx, []string{"sh", "-c", purgeTree, "sh", root, strconv.Itoa(minutes)}, purgeTimeout, nil, false)
-	if err != nil {
-		return nil, err
-	}
-	var removed []string
-	for _, line := range strings.Split(result.Text(), "\n") {
-		if jobIdentity.MatchString(line) {
-			removed = append(removed, line)
+	return purgeDirectories(root, cutoff, func(directory string) (bool, error) {
+		proof, err := os.ReadFile(directory + ".terminal.json")
+		if os.IsNotExist(err) {
+			return false, nil
 		}
+		var ref map[string]any
+		if err != nil || json.Unmarshal(proof, &ref) != nil || ref["cluster_id"] != id || s.checkRef(ref) != nil {
+			return false, nil
+		}
+		release, err := s.acquire(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		defer release()
+		jobs, err := item.QueryMany(ctx, []string{stringField(ref["native_id"])})
+		if err != nil {
+			return false, err
+		}
+		job := jobs[stringField(ref["native_id"])]
+		if !scheduler.Terminal(job.State) || job.Incarnation != ref["incarnation"] || job.Workdir == nil ||
+			filepath.Clean(*job.Workdir) != directory {
+			return false, nil
+		}
+		return true, nil
+	}, ".terminal.json")
+}
+
+func (s *Service) rememberTerminalDirectory(ctx context.Context, cluster map[string]any, job scheduler.Job) {
+	if clusterTransport(cluster)["kind"] == "ssh" || collectable(job, "") == "" {
+		return
 	}
-	if result.ReturnCode != 0 {
-		return removed, protocol.Fail("FILE_UNAVAILABLE", "Some job directories could not be purged", map[string]any{
-			"path": root, "returncode": result.ReturnCode,
-			"stderr": strings.ToValidUTF8(string(result.Stderr), "�"),
-		})
+	root, err := s.jobRoot(ctx, cluster)
+	if err != nil {
+		return
 	}
-	return removed, nil
+	dir := filepath.Clean(*job.Workdir)
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() || !managedJobPath(filepath.ToSlash(root), filepath.ToSlash(dir)) {
+		return
+	}
+	ref, err := s.ref(cluster, job)
+	if err == nil {
+		_ = writeReceipt(dir+".terminal.json", ref, true)
+	}
 }
 
 // collectedArchives lists the per-Cluster directories in the serve-host
@@ -190,10 +205,18 @@ func collectedArchives(root string) []string {
 	return out
 }
 
-// purgeLocal is purgeTree for a serve-host directory: it deletes each job
-// directory under root whose directory and immediate entries were all last
-// modified before cutoff.
-func purgeLocal(root string, cutoff time.Time) ([]string, error) {
+func purgeArchive(ctx context.Context, root string, cutoff time.Time) ([]string, error) {
+	return purgeDirectories(root, cutoff, func(directory string) (bool, error) {
+		receipt, err := readCollectionReceipt(directory)
+		if err != nil || !receipt.Cleaned {
+			return false, nil
+		}
+		entries, err := collectionManifest(ctx, directory, false)
+		return err == nil && reflect.DeepEqual(entries, receipt.Entries), err
+	}, ".receipt.json")
+}
+
+func purgeDirectories(root string, cutoff time.Time, confirmed func(string) (bool, error), sidecar string) ([]string, error) {
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -215,10 +238,19 @@ func purgeLocal(root string, cutoff time.Time) ([]string, error) {
 		if newest.After(cutoff) {
 			continue
 		}
+		safe, err := confirmed(directory)
+		if err != nil {
+			failed = append(failed, entry.Name())
+			continue
+		}
+		if !safe {
+			continue
+		}
 		if err := os.RemoveAll(directory); err != nil {
 			failed = append(failed, entry.Name())
 			continue
 		}
+		_ = os.Remove(directory + sidecar)
 		removed = append(removed, entry.Name())
 	}
 	if len(failed) > 0 {
@@ -228,26 +260,18 @@ func purgeLocal(root string, cutoff time.Time) ([]string, error) {
 	return removed, nil
 }
 
-// newestModification is the latest modification time of directory and its
-// immediate entries. Symlinks report their own time.
+// newestModification checks the whole tree without following symlinks.
 func newestModification(directory string) (time.Time, error) {
-	info, err := os.Lstat(directory)
-	if err != nil {
-		return time.Time{}, err
-	}
-	newest := info.ModTime()
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		return time.Time{}, err
-	}
-	for _, entry := range entries {
-		item, err := entry.Info()
+	var newest time.Time
+	err := filepath.WalkDir(directory, func(_ string, entry os.DirEntry, err error) error {
 		if err != nil {
-			return time.Time{}, err
+			return err
 		}
-		if item.ModTime().After(newest) {
+		item, err := entry.Info()
+		if err == nil && item.ModTime().After(newest) {
 			newest = item.ModTime()
 		}
-	}
-	return newest, nil
+		return err
+	})
+	return newest, err
 }

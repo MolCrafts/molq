@@ -96,9 +96,12 @@ func (s *Service) queryCluster(ctx context.Context, id string, refs []map[string
 		}
 		value := Snapshot(ref, observed, nil)
 		values = append(values, value)
-		s.obs.Remember(value)
 	}
 	s.collectTerminal(ctx, cluster, matched)
+	for _, value := range values {
+		s.setCollectionState(cluster, value, jobs[stringField(mapValue(value["ref"])["native_id"])])
+		s.obs.Remember(value)
+	}
 	return Collection(values, failures)
 }
 
@@ -127,10 +130,13 @@ func (s *Service) listCluster(ctx context.Context, name string) (map[string]any,
 			return nil, nil, err
 		}
 		value := Snapshot(ref, &job, nil)
-		s.obs.Remember(value)
 		values = append(values, value)
 	}
 	s.collectTerminal(ctx, cluster, jobs)
+	for i, value := range values {
+		s.setCollectionState(cluster, value, jobs[i])
+		s.obs.Remember(value)
+	}
 	return cluster, values, nil
 }
 
@@ -149,14 +155,27 @@ func (s *Service) query(ctx context.Context, method string, params map[string]an
 		if err != nil {
 			return nil, err
 		}
-		defer release()
 		jobs, err := item.HistoryRange(ctx, since, until)
+		release()
 		if err != nil {
 			return nil, err
 		}
-		return historyResult(jobs, func(job scheduler.Job) (map[string]any, error) {
+		result := historyResult(jobs, func(job scheduler.Job) (map[string]any, error) {
 			return s.ref(cluster, job)
-		}, params, since, until), nil
+		}, params, since, until)
+		byRef := map[string]scheduler.Job{}
+		for _, job := range jobs {
+			if ref, err := s.ref(cluster, job); err == nil {
+				byRef[RefKey(ref)] = job
+			}
+		}
+		for _, value := range result["snapshots"].([]map[string]any) {
+			job := byRef[RefKey(mapValue(value["ref"]))]
+			s.rememberTerminalDirectory(ctx, cluster, job)
+			s.collect(ctx, cluster, job)
+			s.setCollectionState(cluster, value, job)
+		}
+		return result, nil
 	}
 	var refs []map[string]any
 	if raw, ok := params["refs"].([]any); ok {

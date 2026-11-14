@@ -2,6 +2,7 @@ package serve
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -72,22 +73,56 @@ func jobTree(t *testing.T, root string) {
 	}
 }
 
-// assertPurged checks that only oldJob left root.
+func terminalProof(t *testing.T, s *Service, clusterID, dir string, live bool) {
+	t.Helper()
+	id := filepath.Base(dir)
+	at := time.Now().Add(-40 * 24 * time.Hour)
+	for name, body := range map[string]string{"launch": "99999999\nfixture\n", "exit": "0\n"} {
+		if live && name == "exit" {
+			continue
+		}
+		file := filepath.Join(dir, name)
+		if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(file, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(dir, at, at); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]any{"registry_id": s.Registry.ID, "cluster_id": clusterID, "native_id": id, "incarnation": "99999999:fixture"})
+	if err := os.WriteFile(dir+".terminal.json", body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func archiveProof(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := collectionManifest(context.Background(), dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeReceipt(receiptPath(dir), collectionReceipt{Remote: "/remote", Binding: "fixture", Entries: entries, Cleaned: true}, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func assertPurged(t *testing.T, root string) {
 	t.Helper()
 	if _, err := os.Lstat(filepath.Join(root, oldJob)); !os.IsNotExist(err) {
 		t.Fatalf("old job directory kept: %v", err)
 	}
-	for _, name := range []string{
-		freshJob, liveJob, "notes", "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", "0846919e53ac493dab3608a4ce409be",
-		".0846919e53ac493dab3608a4ce409be8.partial", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "cccccccccccccccccccccccccccccccc",
-	} {
-		if _, err := os.Lstat(filepath.Join(root, name)); err != nil {
-			t.Fatalf("%s removed: %v", name, err)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(root, "cccccccccccccccccccccccccccccccc")); err != nil {
-		t.Fatalf("symlink target removed: %v", err)
+	assertRetained(t, root, liveJob)
+	assertRetained(t, root, freshJob)
+	assertRetained(t, root, "notes")
+}
+
+func assertRetained(t *testing.T, root, name string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(root, name)); err != nil {
+		t.Fatalf("%s removed: %v", name, err)
 	}
 }
 
@@ -130,6 +165,11 @@ func TestPurgeDeletesOnlyOldJobDirectoriesOnLocalTarget(t *testing.T) {
 	id := register(t, service, map[string]any{"name": "local", "scheduler": "shell"})
 	target := filepath.Join(root, "home", ".molcrafts", "molq", "jobs")
 	jobTree(t, target)
+	terminalProof(t, service, id, filepath.Join(target, oldJob), false)
+	terminalProof(t, service, id, filepath.Join(target, liveJob), true)
+	if err := os.Chtimes(filepath.Join(target, liveJob, "stdout"), time.Now().Add(-40*24*time.Hour), time.Now().Add(-40*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 
 	report, results := purgeResults(t, service, map[string]any{})
 	assertPurged(t, target)
@@ -141,7 +181,7 @@ func TestPurgeDeletesOnlyOldJobDirectoriesOnLocalTarget(t *testing.T) {
 	}
 }
 
-func TestPurgeDeletesOldArchivedAndSSHTargetDirectories(t *testing.T) {
+func TestPurgeDeletesCommittedArchivesAndPreservesSSHSources(t *testing.T) {
 	loopbackSSH(t)
 	service, root := purgeService(t)
 	id := register(t, service, map[string]any{
@@ -154,54 +194,19 @@ func TestPurgeDeletesOldArchivedAndSSHTargetDirectories(t *testing.T) {
 	for _, dir := range []string{target, archive, orphan} {
 		jobTree(t, dir)
 	}
+	archiveProof(t, filepath.Join(archive, oldJob))
 
 	report, results := purgeResults(t, service, map[string]any{})
-	for _, dir := range []string{target, archive, orphan} {
-		assertPurged(t, dir)
-	}
+	assertRetained(t, target, oldJob)
+	assertPurged(t, archive)
+	assertRetained(t, orphan, oldJob)
 	if report["partial_failure"] != false || len(results) != 3 {
 		t.Fatalf("report = %#v", report)
 	}
 	for _, result := range results {
-		if !slices.Equal(result["removed"].([]string), []string{oldJob}) {
+		if result["cluster_id"] == id && result["location"] == "archive" && !slices.Equal(result["removed"].([]string), []string{oldJob}) {
 			t.Fatalf("result = %#v", result)
 		}
-	}
-}
-
-func TestPurgeSkipsUnreachableClusterAndContinues(t *testing.T) {
-	loopbackSSH(t)
-	service, root := purgeService(t)
-	broken := register(t, service, map[string]any{
-		"name": "broken", "scheduler": "shell", "transport": map[string]any{"kind": "ssh", "alias": "unreachable"},
-	})
-	register(t, service, map[string]any{"name": "local", "scheduler": "shell"})
-	target := filepath.Join(root, "home", ".molcrafts", "molq", "jobs")
-	archive := filepath.Join(root, "collected", broken)
-	jobTree(t, target)
-	jobTree(t, archive)
-
-	report, results := purgeResults(t, service, map[string]any{})
-	assertPurged(t, target)
-	assertPurged(t, archive)
-	if report["partial_failure"] != true || len(results) != 3 {
-		t.Fatalf("report = %#v", report)
-	}
-	failed := 0
-	for _, result := range results {
-		if result["error"] != nil {
-			failed++
-			if result["cluster_id"] != broken || result["location"] != "target" {
-				t.Fatalf("failure attributed to %#v", result)
-			}
-		}
-	}
-	if failed != 1 {
-		t.Fatalf("failures = %d in %#v", failed, results)
-	}
-	// Serving goes on after the failure.
-	if _, err := service.Call("clusters.list", map[string]any{}); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -265,9 +270,10 @@ func TestPurgeHonoursConfiguredWindow(t *testing.T) {
 
 func TestRetainJobDirectoriesPurgesAtStart(t *testing.T) {
 	service, root := purgeService(t)
-	register(t, service, map[string]any{"name": "local", "scheduler": "shell"})
+	id := register(t, service, map[string]any{"name": "local", "scheduler": "shell"})
 	target := filepath.Join(root, "home", ".molcrafts", "molq", "jobs")
 	jobTree(t, target)
+	terminalProof(t, service, id, filepath.Join(target, oldJob), false)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {

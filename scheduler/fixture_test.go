@@ -241,18 +241,18 @@ func TestSlurmDirectoryFailureDoesNotSubmit(t *testing.T) {
 	}
 }
 
-func TestSlurmCompletingWithEndUsesExitCode(t *testing.T) {
+func TestSlurmCompletingWithEndStaysOpen(t *testing.T) {
 	done := `{"jobs":[{"job_id":"3711469","state":{"current":"COMPLETING"},"time":{"submission":1710000000,"end":1710000010},"exit_code":{"return_code":0,"signal":{"id":0}},"name":"atv-cuda-nddo"}]}`
 	jobs, err := parseSlurmJobs(done, "accounting")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if jobs[0].State != "succeeded" || jobs[0].RawState != "COMPLETING" || jobs[0].EndedAt == nil || jobs[0].ExitCode == nil || *jobs[0].ExitCode != 0 {
+	if jobs[0].State != "running" || jobs[0].RawState != "COMPLETING" || jobs[0].EndedAt != nil || jobs[0].ExitCode != nil {
 		t.Fatalf("%+v", jobs[0])
 	}
-	failed := `{"jobs":[{"job_id":"3711469","state":{"current":"COMPLETING"},"time":{"submission":1710000000,"end":1710000010},"exit_code":{"return_code":8},"name":"atv-cuda-nddo"}]}`
+	failed := `{"jobs":[{"job_id":"3711469","state":{"current":["FAILED","COMPLETING"]},"time":{"submission":1710000000,"end":1710000010},"exit_code":{"return_code":8},"name":"atv-cuda-nddo"}]}`
 	jobs, err = parseSlurmJobs(failed, "accounting")
-	if err != nil || jobs[0].State != "failed" || jobs[0].ExitCode == nil || *jobs[0].ExitCode != 8 {
+	if err != nil || Terminal(jobs[0].State) || jobs[0].ExitCode != nil {
 		t.Fatalf("err=%v job=%+v", err, jobs[0])
 	}
 }
@@ -263,7 +263,7 @@ func TestSlurmCompletingWithoutEndStaysOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if jobs[0].State != "unknown" || jobs[0].EndedAt != nil || Terminal(jobs[0].State) {
+	if jobs[0].State != "running" || jobs[0].EndedAt != nil || Terminal(jobs[0].State) {
 		t.Fatalf("%+v", jobs[0])
 	}
 }

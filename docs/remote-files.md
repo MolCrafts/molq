@@ -2,9 +2,17 @@
 
 Each submission gets one job directory, `~/.molcrafts/molq/jobs/<directory>/` under the execution machine's login home, holding the job script, stdout, stderr, and shell receipts. It is the job's default working directory. A transfer path is an absolute path on that cluster's filesystem. The SSH account's permissions are the boundary.
 
-On an SSH cluster that job directory exists only while the job runs. The first time serve observes a confirmed terminal state (a status query, `wait`, `watch` or `logs`), it moves the directory to the serve host with one rsync, at `collected/<cluster-id>/<directory>/` next to the registry (by default `~/.molcrafts/molq/collected/`), and removes it from the target. rsync deletes each remote file only after copying it, so an interrupted move keeps every file on one side and resumes at the next observation; a failure leaves the remote copy in place and is reported on serve's stderr. Logs of a collected job are read from the local copy. Files a job writes into its own job directory, which is its default working directory, move with it; anything that must stay on the cluster belongs in an explicit execution `cwd` elsewhere.
+When serve observes a confirmed SSH job terminal state, it copies the job
+directory to a staging directory on the serve host, verifies the tree, and
+commits the copy and checksum receipt in `collected/<cluster-id>/` next to the
+registry. Only then does it remove the verified source. An interrupted copy
+keeps the source and resumes on a later observation. Logs are read from the
+committed copy. The optional `collection_state` in a snapshot reports copy
+availability separately from compute completion. Files written to a job's
+default working directory are collected with it.
 
-Job directories on targets and in `collected/` are deleted, not archived, once unchanged for `job_retention_days` (30 by default); see [retention](configuration.md#job-directory-retention).
+See [retention](configuration.md#job-directory-retention) for when local and
+collected directories are deleted.
 
 ## Read job output
 

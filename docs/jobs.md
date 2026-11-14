@@ -151,7 +151,8 @@ the same service for a bounded interval; it does not survive a restart.
 
 Each submission's job directory (`~/.molcrafts/molq/jobs/<id>/` on the target,
 or its collected copy under `collected/` on the serve host) is deleted outright
-once nothing in it has changed for `job_retention_days`, 30 days by default.
+once the job is confirmed terminal, any required SSH collection has completed,
+and nothing in it has changed for `job_retention_days` (30 days by default).
 Its script, logs and receipts go with it, and so do files the job wrote into its
 default working directory; set an explicit execution `cwd` for results you want
 to keep. See [retention](configuration.md#job-directory-retention) to change or

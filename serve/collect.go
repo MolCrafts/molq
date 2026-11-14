@@ -8,19 +8,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
-	"github.com/MolCrafts/molq/protocol"
 	"github.com/MolCrafts/molq/scheduler"
-	"github.com/MolCrafts/molq/transport"
 )
 
 // jobIdentity is the name submit gives each job directory under JobRoot.
 var jobIdentity = regexp.MustCompile(`^[0-9a-f]{32}$`)
-
-// removeEmptyTree removes only empty directories, so it cannot destroy data;
-// it succeeds when nothing is left at the path.
-const removeEmptyTree = `find "$1" -depth -type d -exec rmdir -- {} \; 2>/dev/null; [ ! -e "$1" ]`
 
 // archive is the serve-host directory that receives an SSH Cluster's job
 // directories. Local targets already live on the serve host and have none.
@@ -51,15 +44,13 @@ func collectable(job scheduler.Job, archive string) string {
 // not hold the Cluster's native slot.
 func (s *Service) collectTerminal(ctx context.Context, cluster map[string]any, jobs []scheduler.Job) {
 	for _, job := range jobs {
+		s.rememberTerminalDirectory(ctx, cluster, job)
 		s.collect(ctx, cluster, job)
 	}
 }
 
 // collect moves a terminal job's directory from an SSH target to the serve
-// host and returns the local copy, or "" when the job has none yet. rsync
-// deletes each source file only after copying it, so an interrupted move
-// leaves every file on one side and the next observation resumes it. A failure
-// keeps the remote files and never changes the observation itself.
+// host and returns the committed local copy, or "" when it is unavailable.
 func (s *Service) collect(ctx context.Context, cluster map[string]any, job scheduler.Job) string {
 	archive := s.archive(cluster)
 	identity := collectable(job, archive)
@@ -67,8 +58,12 @@ func (s *Service) collect(ctx context.Context, cluster map[string]any, job sched
 		return ""
 	}
 	final := filepath.Join(archive, identity)
-	if isDirectory(final) {
+	if isDirectory(final) && !collectionNeedsCleanup(final) {
 		return final
+	}
+	root, err := s.jobRoot(ctx, cluster)
+	if err != nil || !managedJobPath(root, path.Clean(*job.Workdir)) {
+		return ""
 	}
 	s.mu.Lock()
 	if s.collections == nil {
@@ -96,49 +91,11 @@ func (s *Service) collect(ctx context.Context, cluster map[string]any, job sched
 	}()
 	if err := s.moveJobDirectory(ctx, cluster, path.Clean(*job.Workdir), final); err != nil {
 		fmt.Fprintf(os.Stderr, "molq serve: job directory %s stays on Cluster %s: %s\n", identity, stringField(cluster["name"]), mustJSON(asData(err)))
-		return ""
+		if !isDirectory(final) {
+			return ""
+		}
 	}
 	return final
-}
-
-func (s *Service) moveJobDirectory(ctx context.Context, cluster map[string]any, remote, final string) error {
-	partial := filepath.Join(filepath.Dir(final), "."+filepath.Base(final)+".partial")
-	if err := os.MkdirAll(partial, 0o700); err != nil {
-		return protocol.Fail("FILE_UNAVAILABLE", "Cannot create the local job directory", map[string]any{"path": partial})
-	}
-	release, err := s.acquire(ctx, stringField(cluster["id"]))
-	if err != nil {
-		return err
-	}
-	defer release()
-	binding := clusterTransport(cluster)
-	source := location{transport: binding, path: remote + "/"}
-	destination := location{transport: map[string]any{"kind": "local"}, path: filepath.ToSlash(partial) + "/"}
-	runner, rsh, operands, err := transferRoute([]location{source}, destination)
-	if err != nil {
-		return err
-	}
-	args := append(append([]string{"rsync", "-a", "--remove-source-files"}, rsh...), "--")
-	// A failed copy is not final: an earlier attempt may already have moved
-	// everything, which the cleanup below confirms.
-	copied, err := runner.Run(ctx, append(args, operands...), transferTimeout, nil, false)
-	if err != nil {
-		return err
-	}
-	cleaned, err := transport.Create(binding).Run(ctx, []string{"sh", "-c", removeEmptyTree, "sh", remote}, 30*time.Second, nil, false)
-	if err != nil {
-		return err
-	}
-	if cleaned.ReturnCode != 0 {
-		return protocol.Fail("FILE_UNAVAILABLE", "Remote job directory is not empty after collection", map[string]any{
-			"path": remote, "rsync_returncode": copied.ReturnCode,
-			"stderr": strings.ToValidUTF8(string(copied.Stderr), "\uFFFD"),
-		})
-	}
-	if err := os.Rename(partial, final); err != nil {
-		return protocol.Fail("FILE_UNAVAILABLE", "Cannot finish the local job directory", map[string]any{"path": final})
-	}
-	return nil
 }
 
 // collectedPath maps a path inside the job's observed directory to the
@@ -154,7 +111,27 @@ func collectedPath(local string, workdir *string, target string) (string, bool) 
 	return filepath.Join(local, filepath.FromSlash(relative)), true
 }
 
+func managedJobPath(root, dir string) bool {
+	return path.Dir(dir) == root && jobIdentity.MatchString(path.Base(dir))
+}
+
 func isDirectory(name string) bool {
 	info, err := os.Stat(name)
 	return err == nil && info.IsDir()
+}
+
+// setCollectionState keeps the availability of a verified copy separate from
+// the scheduler's compute state.
+func (s *Service) setCollectionState(cluster, snapshot map[string]any, job scheduler.Job) {
+	archive := s.archive(cluster)
+	if archive == "" || snapshot["terminal"] != true {
+		return
+	}
+	if identity := collectable(job, archive); identity != "" {
+		snapshot["collection_state"] = "pending"
+		final := filepath.Join(archive, identity)
+		if _, err := readCollectionReceipt(final); err == nil && isDirectory(final) {
+			snapshot["collection_state"] = "committed"
+		}
+	}
 }

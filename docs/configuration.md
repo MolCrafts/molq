@@ -100,13 +100,12 @@ RPC operations still require an explicit scope.
 
 ## Job directory retention
 
-`job_retention_days` (default `30`) is how long job directories are kept. A job
-directory whose newest modification time, taken over the directory and its
-immediate entries, is older than that many days is deleted with its contents. It
-is not archived and cannot be recovered. This covers every registered cluster's
-`~/.molcrafts/molq/jobs/` and the serve host's `collected/` archive next to the
-registry, including archives of removed clusters. Only directories named by a
-32-digit job identity are touched; anything else under those roots stays.
+`job_retention_days` (default `30`) applies to the newest modification
+anywhere in a managed job directory. Purge checks fresh native terminal
+evidence for local jobs. SSH sources are removed by verified collection.
+Only verified archives whose SSH cleanup finished are eligible for retention
+deletion, including archives of removed clusters. Unknown jobs, legacy
+archives without receipts and interrupted collections are kept.
 `0` disables purging. Values are whole days from 0 to 36500.
 
 ```sh
@@ -120,10 +119,7 @@ setting on each pass. A temporary stdio service does not purge on its own; run
 archive gets one result listing the removed directories; a cluster that cannot
 be reached reports an error there, sets `partial_failure` (CLI exit 8), and does
 not stop the others. The listening service writes those failures to stderr.
-A job that runs longer than the window without changing its job directory
-(no stdout, stderr or script change) loses that directory, including Shell
-receipts. Once a directory is gone, its logs and Shell job state can no longer
-be read.
+After a directory is deleted, its logs and any Shell execution receipts are gone.
 
 SSH connection options belong in OpenSSH configuration. molq does not read
 `MOLQ_*` environment variables. See [watch configuration](plugins.md#defaults)

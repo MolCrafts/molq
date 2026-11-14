@@ -259,9 +259,12 @@ func (s *Slurm) QueryMany(ctx context.Context, ids []string) (map[string]Job, er
 	text, err := s.native(ctx, []string{"squeue", "--json", "--jobs", strings.Join(ids, ",")}, false, nil, false)
 	if err != nil {
 		item, ok := err.(*protocol.Error)
+		if !ok {
+			return nil, err
+		}
 		stderr, _ := item.Context["stderr"].(string)
 		code, _ := AsInt(item.Context["returncode"])
-		if !ok || code != 1 || !strings.Contains(stderr, "Invalid job id specified") {
+		if code != 1 || !strings.Contains(stderr, "Invalid job id specified") {
 			return nil, err
 		}
 		return s.History(ctx, ids)
@@ -403,18 +406,34 @@ func slurmJob(row map[string]any, source string) (Job, error) {
 	if identity == "" || strings.IndexFunc(identity, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
 		return Job{}, protocol.Fail("SCHEDULER_UNAVAILABLE", "Invalid/partial Slurm JSON response", nil)
 	}
-	var raw string
+	var states any
 	if source == "queue" {
-		raw = firstString(row["job_state"])
+		states = row["job_state"]
 	} else {
-		raw = firstString(mapAny(row["state"])["current"])
+		states = mapAny(row["state"])["current"]
 	}
-	if raw == "" {
+	raw := firstString(states)
+	if strings.TrimSpace(raw) == "" {
 		return Job{}, protocol.Fail("SCHEDULER_UNAVAILABLE", "Invalid/partial Slurm JSON response", nil)
 	}
-	token := strings.TrimRight(strings.Fields(raw)[0], "+")
+	if flags, ok := states.([]any); ok {
+		parts := make([]string, 0, len(flags))
+		for _, flag := range flags {
+			if text, ok := flag.(string); ok && strings.TrimSpace(text) != "" {
+				parts = append(parts, text)
+			} else {
+				return Job{}, protocol.Fail("SCHEDULER_UNAVAILABLE", "Invalid Slurm state flags", nil)
+			}
+		}
+		raw = strings.Join(parts, ",")
+	}
+	token := strings.TrimRight(strings.Fields(firstString(states))[0], "+")
 	state := slurmStates[token]
 	if state == "" {
+		state = "unknown"
+	}
+	// A base terminal state with any outstanding flag is not safe to collect.
+	if Terminal(state) && (strings.Contains(raw, ",") || strings.HasSuffix(strings.Fields(raw)[0], "+")) {
 		state = "unknown"
 	}
 	times := mapAny(row["time"])
@@ -429,17 +448,6 @@ func slurmJob(row map[string]any, source string) (Job, error) {
 		ended = slurmTime(times["end"])
 	}
 	exitCode := slurmExitCode(row)
-	if token == "COMPLETING" {
-		if ended != nil {
-			if exitCode == nil || *exitCode == 0 {
-				state = "succeeded"
-			} else {
-				state = "failed"
-			}
-		} else {
-			state = "unknown"
-		}
-	}
 	if !Terminal(state) {
 		ended = nil
 		exitCode = nil

@@ -220,6 +220,7 @@ class JobSnapshot(TypedDict):
     freshness: Freshness
     source: Literal["queue", "accounting", "shell_receipt", "absent", "unavailable"]
     raw_state: str
+    collection_state: NotRequired[Literal["pending", "committed"]]
     exit_code: int | None
     name: NotRequired[str | None]
     comment: NotRequired[str | None]

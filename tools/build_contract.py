@@ -245,6 +245,7 @@ defs.update(
                     ]
                 },
                 "raw_state": {"type": "string"},
+                "collection_state": {"enum": ["pending", "committed"]},
                 "exit_code": {"type": ["integer", "null"]},
                 **{
                     field: {"type": ["string", "null"]}
