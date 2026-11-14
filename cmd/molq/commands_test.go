@@ -99,10 +99,10 @@ printf '{"jobs":[{"job_id":"123","job_state":"RUNNING","submit_time":1710000000,
 		t.Fatalf("job directories = %v, err = %v", jobs, err)
 	}
 	directory := filepath.Join(jobRoot, jobs[0].Name())
-	if entries, err := os.ReadDir(directory); err != nil || len(entries) != 2 || entries[0].Name() != "stderr" || entries[1].Name() != "stdout" {
+	if entries, err := os.ReadDir(filepath.Join(directory, ".molq-control")); err != nil || len(entries) != 3 || entries[0].Name() != "owned-v1" || entries[1].Name() != "stderr" || entries[2].Name() != "stdout" {
 		t.Fatalf("job files = %v, err = %v", entries, err)
 	}
-	if stdout, err := os.ReadFile(filepath.Join(directory, "stdout")); err != nil || strings.TrimSpace(string(stdout)) != directory {
+	if stdout, err := os.ReadFile(filepath.Join(directory, ".molq-control", "stdout")); err != nil || strings.TrimSpace(string(stdout)) != directory {
 		t.Fatalf("job cwd = %q, err = %v", stdout, err)
 	}
 }

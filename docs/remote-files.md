@@ -1,18 +1,21 @@
 # Files and logs
 
-Each submission gets one job directory, `~/.molcrafts/molq/jobs/<directory>/` under the execution machine's login home, holding the job script, stdout, stderr, and shell receipts. It is the job's default working directory. A transfer path is an absolute path on that cluster's filesystem. The SSH account's permissions are the boundary.
+Each submission gets a default working directory under
+`~/.molcrafts/molq/jobs/<directory>/`. MolQ reserves `.molq-control/`
+for its default allocation logs, generated scripts and execution receipts.
+Application files and custom Step output paths belong to the caller.
 
-When serve observes a confirmed SSH job terminal state, it copies the job
-directory to a staging directory on the serve host, verifies the tree, and
-commits the copy and checksum receipt in `collected/<cluster-id>/` next to the
-registry. Only then does it remove the verified source. An interrupted copy
-keeps the source and resumes on a later observation. Logs are read from the
-committed copy. The optional `collection_state` in a snapshot reports copy
-availability separately from compute completion. Files written to a job's
-default working directory are collected with it.
+When serve observes a confirmed SSH job terminal state, it copies only
+the scheduler's managed control files. It verifies the copy and commits
+a checksum receipt in `collected/<cluster-id>/` before removing the
+verified source files. Logs are read from the committed copy. A failed copy
+can resume on a later observation. Directories without an ownership
+manifest are preserved, including legacy directories.
 
-See [retention](configuration.md#job-directory-retention) for when local and
-collected directories are deleted.
+Use [a named artifact manifest](api.md#select-named-outputs-with-a-manifest)
+to retrieve user outputs explicitly. They stay at their original paths.
+See [retention](configuration.md#job-directory-retention) for when managed
+control files are deleted.
 
 ## Read job output
 

@@ -397,11 +397,36 @@ func (s *Service) logs(ctx context.Context, params map[string]any) (any, error) 
 		limit = 262144
 	}
 	var data []byte
-	if local, ok := collectedPath(s.collect(ctx, cluster, job), job.Workdir, location); ok {
-		data, err = transport.Local{}.Read(ctx, local, offset, limit)
+	local := s.collect(ctx, cluster, job)
+	if job.Workdir != nil {
+		control := path.Join(*job.Workdir, scheduler.ControlDirectory)
+		fallback := location == path.Join(*job.Workdir, stream)
+		if local != "" {
+			if receipt, receiptErr := readCollectionReceipt(local); receiptErr == nil &&
+				path.Base(receipt.Remote) == scheduler.ControlDirectory {
+				if fallback || location == path.Join(control, stream) {
+					data, err = transport.Local{}.Read(ctx, filepath.Join(local, stream), offset, limit)
+					return logChunk(offset, data, err)
+				}
+				// The new archive contains control files only.
+				local = ""
+			}
+		}
+		if fallback {
+			if _, probe := s.readTarget(ctx, cluster, path.Join(control, scheduler.ControlManifest), 0, 1); probe == nil {
+				location = path.Join(control, stream)
+			}
+		}
+	}
+	if localPath, ok := collectedPath(local, job.Workdir, location); ok {
+		data, err = transport.Local{}.Read(ctx, localPath, offset, limit)
 	} else {
 		data, err = s.readTarget(ctx, cluster, location, offset, limit)
 	}
+	return logChunk(offset, data, err)
+}
+
+func logChunk(offset int, data []byte, err error) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}

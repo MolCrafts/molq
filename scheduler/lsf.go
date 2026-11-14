@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -61,7 +62,7 @@ func (l *LSF) Render(spec map[string]any, directory string) (string, error) {
 	}
 	resources, scheduling := mapAny(spec["resources"]), mapAny(spec["scheduling"])
 	directives := []string{
-		"-cwd " + quote(directory), "-o " + quote(directory+"/stdout"), "-e " + quote(directory+"/stderr"),
+		"-cwd " + quote(directory), "-o " + quote(controlPath(directory, "stdout")), "-e " + quote(controlPath(directory, "stderr")),
 		"-n " + itoa(defaultInt(resources["tasks"], 1)), `-R "span[hosts=1]"`,
 	}
 	if seconds, ok := AsInt(resources["time_limit_seconds"]); ok {
@@ -96,6 +97,9 @@ func (l *LSF) Render(spec map[string]any, directory string) (string, error) {
 }
 
 func (l *LSF) Submit(ctx context.Context, spec map[string]any, directory string) (Job, error) {
+	if err := l.prepareControl(ctx, directory, nil, "stdout stderr job.sh"); err != nil {
+		return Job{}, err
+	}
 	if _, err := l.stage(ctx, spec, directory, l.Validate, l.Render); err != nil {
 		return Job{}, err
 	}
@@ -199,7 +203,10 @@ func parseLSF(text string) (map[string]Job, error) {
 		workdir := stringField(row["EXEC_CWD"])
 		if workdir == "" || workdir == "-" {
 			if strings.HasPrefix(output, "/") {
-				workdir = output[:strings.LastIndex(output, "/")]
+				workdir = path.Dir(output)
+				if path.Base(workdir) == ControlDirectory {
+					workdir = path.Dir(workdir)
+				}
 			} else {
 				workdir = ""
 			}

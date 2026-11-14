@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/MolCrafts/molq/protocol"
@@ -142,7 +144,12 @@ func (s *Service) purgeTarget(ctx context.Context, cluster map[string]any, cutof
 	if err != nil {
 		return nil, err
 	}
-	return purgeDirectories(root, cutoff, func(directory string) (bool, error) {
+	release, err := s.acquire(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return purgeDirectories(ctx, root, cutoff, func(directory string) (bool, error) {
 		proof, err := os.ReadFile(directory + ".terminal.json")
 		if os.IsNotExist(err) {
 			return false, nil
@@ -151,11 +158,6 @@ func (s *Service) purgeTarget(ctx context.Context, cluster map[string]any, cutof
 		if err != nil || json.Unmarshal(proof, &ref) != nil || ref["cluster_id"] != id || s.checkRef(ref) != nil {
 			return false, nil
 		}
-		release, err := s.acquire(ctx, id)
-		if err != nil {
-			return false, err
-		}
-		defer release()
 		jobs, err := item.QueryMany(ctx, []string{stringField(ref["native_id"])})
 		if err != nil {
 			return false, err
@@ -205,17 +207,17 @@ func collectedArchives(root string) []string {
 }
 
 func purgeArchive(ctx context.Context, root string, cutoff time.Time) ([]string, error) {
-	return purgeDirectories(root, cutoff, func(directory string) (bool, error) {
+	return purgeDirectories(ctx, root, cutoff, func(directory string) (bool, error) {
 		receipt, err := readCollectionReceipt(directory)
-		if err != nil || !receipt.Cleaned {
+		if err != nil || !receipt.Cleaned || path.Base(receipt.Remote) != scheduler.ControlDirectory {
 			return false, nil
 		}
 		entries, err := collectionManifest(ctx, directory, false)
-		return err == nil && reflect.DeepEqual(entries, receipt.Entries), err
+		return err == nil && reflect.DeepEqual(entries, receipt.Entries) && ownedEntries(directory, entries), err
 	}, ".receipt.json", true)
 }
 
-func purgeDirectories(root string, cutoff time.Time, confirmed func(string) (bool, error), sidecar string, archive bool) ([]string, error) {
+func purgeDirectories(ctx context.Context, root string, cutoff time.Time, confirmed func(string) (bool, error), sidecar string, archive bool) ([]string, error) {
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -225,7 +227,14 @@ func purgeDirectories(root string, cutoff time.Time, confirmed func(string) (boo
 	}
 	var removed, failed []string
 	remove := func(directory, identity string) {
-		newest, err := newestModification(directory)
+		control := directory
+		if !archive {
+			control = filepath.Join(directory, scheduler.ControlDirectory)
+		}
+		if !isDirectory(control) {
+			return
+		}
+		newest, err := newestModification(control)
 		if err != nil {
 			failed = append(failed, identity)
 			return
@@ -241,14 +250,21 @@ func purgeDirectories(root string, cutoff time.Time, confirmed func(string) (boo
 		if !safe {
 			return
 		}
-		if newest, err := newestModification(directory); err != nil || newest.After(cutoff) {
+		if newest, err := newestModification(control); err != nil || newest.After(cutoff) {
 			return
 		}
-		if err := os.RemoveAll(directory); err != nil {
+		entries, err := collectionManifest(ctx, control, false)
+		if err != nil || !ownedEntries(control, entries) {
+			return
+		}
+		if err := removeOwnedLocal(control, entries); err != nil {
 			failed = append(failed, identity)
 			return
 		}
 		_ = os.Remove(directory + sidecar)
+		if !archive {
+			_ = os.Remove(directory)
+		}
 		removed = append(removed, identity)
 	}
 	for _, entry := range entries {
@@ -270,10 +286,7 @@ func purgeDirectories(root string, cutoff time.Time, confirmed func(string) (boo
 				remove(filepath.Join(directory, child.Name()), name+"_"+child.Name())
 			}
 		}
-		if len(children) > 0 {
-			// Only a genuinely empty parent can be removed here.
-			_ = os.Remove(directory)
-		}
+
 	}
 	if len(failed) > 0 {
 		sort.Strings(failed)
@@ -296,4 +309,27 @@ func newestModification(directory string) (time.Time, error) {
 		return err
 	})
 	return newest, err
+}
+
+func removeOwnedLocal(directory string, entries map[string]string) error {
+	for name, sum := range entries {
+		if name == "." || name == scheduler.ControlManifest {
+			continue
+		}
+		file := filepath.Join(directory, name)
+		info, err := os.Lstat(file)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || !strings.HasPrefix(sum, "sha256:") {
+			return fmt.Errorf("control file changed: %s", name)
+		}
+		if err := os.Remove(file); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(filepath.Join(directory, scheduler.ControlManifest)); err != nil {
+		return err
+	}
+	return os.Remove(directory)
 }

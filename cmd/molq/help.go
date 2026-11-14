@@ -117,7 +117,7 @@ var commandHelp = map[string]string{
   range filters. wait polls until the job is confirmed finished or the timeout
   expires; the job keeps running if this command stops. cancel asks the
   scheduler to cancel. An accepted result is not proof the job has stopped.
-  purge deletes verified terminal local directories and completed archives
+  purge deletes owned control files from verified terminal jobs and completed archives
   older than job_retention_days (default 30; 0 disables).`,
 	"transfer": `molq transfer [RSYNC_OPTION...] SRC... DEST
 

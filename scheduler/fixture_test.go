@@ -219,10 +219,10 @@ func TestSlurmSubmitStreamsScriptAndSetsJobPaths(t *testing.T) {
 	if job.NativeID != "123" || len(fake.files) != 0 || len(fake.calls) != 3 {
 		t.Fatalf("job=%+v files=%v calls=%v", job, fake.files, fake.calls)
 	}
-	if fake.calls[0][0] != "sh" || fake.calls[0][len(fake.calls[0])-1] != directory {
+	if fake.calls[0][0] != "sh" || fake.calls[0][4] != directory {
 		t.Fatalf("directory creation = %v", fake.calls[0])
 	}
-	want := []string{"env", "-u", "SBATCH_ARRAY_INX", "sbatch", "--parsable", "--chdir=" + directory, "--output=/target/a b%%j/job/stdout", "--error=/target/a b%%j/job/stderr", "--job-name=job.sh", "--no-requeue", "--comment", "test comment"}
+	want := []string{"env", "-u", "SBATCH_ARRAY_INX", "sbatch", "--parsable", "--chdir=" + directory, "--output=/target/a b%%j/job/.molq-control/stdout", "--error=/target/a b%%j/job/.molq-control/stderr", "--job-name=job.sh", "--no-requeue", "--comment", "test comment"}
 	if !slices.Equal(fake.calls[1], want) {
 		t.Fatalf("submission argv = %v", fake.calls[1])
 	}

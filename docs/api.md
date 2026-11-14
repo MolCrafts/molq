@@ -172,8 +172,8 @@ with Molq() as mq:
 If delivery fails, inspect the transfer error and destination before
 calling `delivery.deliver()` again. A transfer acknowledgement records the
 rsync result. Your application can verify content and publish it separately.
-Keep persistent results in a shared workspace outside MolQ's managed job
-directory, which still follows the existing terminal collection policy.
+Keep persistent results outside the reserved `.molq-control/` directory.
+Automatic collection and retention apply only to manifest-owned control files.
 
 ### Select named outputs with a manifest
 

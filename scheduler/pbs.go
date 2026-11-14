@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"path"
 	"strings"
 	"time"
 
@@ -89,7 +90,7 @@ func (p *PBS) Render(spec map[string]any, directory string) (string, error) {
 	for _, item := range anySlice(resources["accelerators"]) {
 		chunk += ":ngpus=" + itoa(defaultInt(mapAny(item)["quantity"], 0))
 	}
-	directives := []string{"-l " + chunk, "-o " + quote(directory+"/stdout"), "-e " + quote(directory+"/stderr")}
+	directives := []string{"-l " + chunk, "-o " + quote(controlPath(directory, "stdout")), "-e " + quote(controlPath(directory, "stderr"))}
 	if seconds, ok := AsInt(resources["time_limit_seconds"]); ok {
 		directives = append(directives, "-l walltime="+itoa(seconds/3600)+":"+two(seconds%3600/60)+":"+two(seconds%60))
 	}
@@ -117,6 +118,9 @@ func (p *PBS) Render(spec map[string]any, directory string) (string, error) {
 }
 
 func (p *PBS) Submit(ctx context.Context, spec map[string]any, directory string) (Job, error) {
+	if err := p.prepareControl(ctx, directory, nil, "stdout stderr job.sh"); err != nil {
+		return Job{}, err
+	}
 	script, err := p.stage(ctx, spec, directory, p.Validate, p.Render)
 	if err != nil {
 		return Job{}, err
@@ -214,7 +218,10 @@ func parsePBS(text, source string) (map[string]Job, error) {
 		errorPath := strings.SplitN(stringField(row["Error_Path"]), ":", 2)
 		workdir := ""
 		if outputPath != "" {
-			workdir = outputPath[:strings.LastIndex(outputPath, "/")]
+			workdir = path.Dir(outputPath)
+			if path.Base(workdir) == ControlDirectory {
+				workdir = path.Dir(workdir)
+			}
 		}
 		ctime := stringField(row["ctime"])
 		jobs[identity] = Job{

@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"path"
 	"time"
 
 	"github.com/MolCrafts/molq/protocol"
@@ -102,7 +101,7 @@ func (c *core) stage(ctx context.Context, spec map[string]any, directory string,
 	if err != nil {
 		return "", err
 	}
-	target := path.Join(directory, "job.sh")
+	target := controlPath(directory, "job.sh")
 	if err := c.transport.Write(ctx, target, []byte(script), nil); err != nil {
 		return "", err
 	}

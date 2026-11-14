@@ -9,6 +9,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/MolCrafts/molq/scheduler"
 )
 
 const (
@@ -77,11 +79,15 @@ func terminalProof(t *testing.T, s *Service, clusterID, dir string, live bool) {
 	t.Helper()
 	id := filepath.Base(dir)
 	at := time.Now().Add(-40 * 24 * time.Hour)
-	for name, body := range map[string]string{"launch": "99999999\nfixture\n", "exit": "0\n"} {
+	control := filepath.Join(dir, scheduler.ControlDirectory)
+	if err := os.Mkdir(control, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"launch": "99999999\nfixture\n", "exit": "0\n", scheduler.ControlManifest: scheduler.ControlFiles + "\n"} {
 		if live && name == "exit" {
 			continue
 		}
-		file := filepath.Join(dir, name)
+		file := filepath.Join(control, name)
 		if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +95,7 @@ func terminalProof(t *testing.T, s *Service, clusterID, dir string, live bool) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Chtimes(dir, at, at); err != nil {
+	if err := os.Chtimes(control, at, at); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(map[string]any{"registry_id": s.Registry.ID, "cluster_id": clusterID, "native_id": id, "incarnation": "99999999:fixture"})
@@ -100,11 +106,21 @@ func terminalProof(t *testing.T, s *Service, clusterID, dir string, live bool) {
 
 func archiveProof(t *testing.T, dir string) {
 	t.Helper()
+	marker := filepath.Join(dir, scheduler.ControlManifest)
+	if err := os.WriteFile(marker, []byte("stdout stderr\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().Add(-40 * 24 * time.Hour)
+	for _, name := range []string{marker, dir} {
+		if err := os.Chtimes(name, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
 	entries, err := collectionManifest(context.Background(), dir, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeReceipt(receiptPath(dir), collectionReceipt{Remote: "/remote", Binding: "fixture", Entries: entries, Cleaned: true}, false); err != nil {
+	if err := writeReceipt(receiptPath(dir), collectionReceipt{Remote: "/remote/" + scheduler.ControlDirectory, Binding: "fixture", Entries: entries, Cleaned: true}, false); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -172,7 +188,10 @@ func TestPurgeDeletesOnlyOldJobDirectoriesOnLocalTarget(t *testing.T) {
 	}
 
 	report, results := purgeResults(t, service, map[string]any{})
-	assertPurged(t, target)
+	assertRetained(t, filepath.Join(target, oldJob), "stdout")
+	if isDirectory(filepath.Join(target, oldJob, scheduler.ControlDirectory)) {
+		t.Fatal("old owned control directory kept")
+	}
 	if report["retention_days"] != 30 || report["partial_failure"] != false || len(results) != 1 {
 		t.Fatalf("report = %#v", report)
 	}
@@ -282,7 +301,7 @@ func TestRetainJobDirectoriesPurgesAtStart(t *testing.T) {
 	}()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		if _, err := os.Lstat(filepath.Join(target, oldJob)); os.IsNotExist(err) {
+		if _, err := os.Lstat(filepath.Join(target, oldJob, scheduler.ControlDirectory)); os.IsNotExist(err) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -292,5 +311,8 @@ func TestRetainJobDirectoriesPurgesAtStart(t *testing.T) {
 	}
 	cancel()
 	<-done
-	assertPurged(t, target)
+	assertRetained(t, filepath.Join(target, oldJob), "stdout")
+	if isDirectory(filepath.Join(target, oldJob, scheduler.ControlDirectory)) {
+		t.Fatal("old owned control directory kept")
+	}
 }

@@ -10,6 +10,9 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"slices"
+
+	"github.com/MolCrafts/molq/scheduler"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -42,7 +45,7 @@ func readCollectionReceipt(final string) (collectionReceipt, error) {
 
 func collectionNeedsCleanup(final string) bool {
 	receipt, err := readCollectionReceipt(final)
-	return err == nil && !receipt.Cleaned
+	return err == nil && path.Base(receipt.Remote) == scheduler.ControlDirectory && !receipt.Cleaned
 }
 
 // writeReceipt publishes complete JSON and syncs it before destructive work.
@@ -155,7 +158,7 @@ func (r contextReader) Read(p []byte) (int, error) {
 }
 
 func collectionRsync(ctx context.Context, binding map[string]any, remote, local string, verify, subset bool) error {
-	source := location{transport: binding, path: remote + "/"}
+	source := location{transport: binding, path: remote + "/", root: remote}
 	destination := location{transport: map[string]any{"kind": "local"}, path: filepath.ToSlash(local) + "/"}
 	runner, rsh, operands, err := transferRoute([]location{source}, destination)
 	if err != nil {
@@ -206,7 +209,55 @@ func collectionDifferences(output string) bool {
 	return false
 }
 
+// ownedControl validates the ownership marker and every existing entry. An
+// unexpected entry disables cleanup for the whole control directory.
+const ownedControl = `[ -d "$1" ] && [ ! -L "$1" ] && [ ! -L "${1%/*}" ] || exit 3
+marker=$2
+[ ! -L "$1/$marker" ] && [ -f "$1/$marker" ] || exit 3
+IFS= read -r owned < "$1/$marker" || exit 3
+case "$owned" in
+  'stdout stderr'|'stdout stderr job.sh'|'stdout stderr job.sh launch exit cancel_requested') ;;
+  *) exit 3 ;;
+esac
+for f in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+  [ -e "$f" ] || [ -L "$f" ] || continue
+  [ -f "$f" ] && [ ! -L "$f" ] || exit 3
+  name=${f##*/}
+  [ "$name" = "$marker" ] && continue
+  case " $owned " in *" $name "*) ;; *) exit 3;; esac
+done
+`
+
+func ownedEntries(directory string, entries map[string]string) bool {
+	marker := filepath.Join(directory, scheduler.ControlManifest)
+	info, err := os.Lstat(marker)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 128 {
+		return false
+	}
+	body, err := os.ReadFile(marker)
+	if err != nil || entries[scheduler.ControlManifest] == "" {
+		return false
+	}
+	owned := strings.TrimSuffix(string(body), "\n")
+	if owned != "stdout stderr" && owned != "stdout stderr job.sh" && owned != scheduler.ControlFiles {
+		return false
+	}
+	names := strings.Fields(owned)
+	for name, sum := range entries {
+		if name == "." {
+			continue
+		}
+		if !strings.HasPrefix(sum, "sha256:") || (name != scheduler.ControlManifest && !slices.Contains(names, name)) {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Service) moveJobDirectory(ctx context.Context, cluster map[string]any, remote, final string) error {
+	if path.Base(remote) != scheduler.ControlDirectory {
+		return nil
+	}
 	binding := clusterTransport(cluster)
 	if err := os.MkdirAll(filepath.Dir(final), 0o700); err != nil {
 		return err
@@ -222,18 +273,18 @@ func (s *Service) moveJobDirectory(ctx context.Context, cluster map[string]any, 
 	}
 	if !isDirectory(final) {
 		target := transport.Create(binding)
-		check, err := target.Run(ctx, []string{"sh", "-c", `[ -d "$1" ] && [ ! -L "$1" ] && [ ! -L "${1%/*}" ]`, "sh", remote}, 30*time.Second, nil, false)
+		check, err := target.Run(ctx, []string{"sh", "-c", ownedControl, "sh", remote, scheduler.ControlManifest}, 30*time.Second, nil, false)
 		if err != nil {
 			return err
 		}
 		if check.ReturnCode != 0 {
-			return protocol.Fail("FILE_UNAVAILABLE", "Job collection source is missing or is a symlink", nil)
+			return nil
 		}
 		if _, err := os.Lstat(filepath.Join(filepath.Dir(final), "."+filepath.Base(final)+".partial")); !os.IsNotExist(err) {
 			return protocol.Fail("FILE_UNAVAILABLE", "Legacy partial job directory requires manual recovery", nil)
 		}
 		stage := final + ".staging"
-		if err := os.MkdirAll(stage, 0o700); err != nil {
+		if err := os.Mkdir(stage, 0o700); err != nil && !(os.IsExist(err) && isDirectory(stage)) {
 			return err
 		}
 		if err := collectionRsync(ctx, binding, remote, stage, false, false); err != nil {
@@ -245,6 +296,9 @@ func (s *Service) moveJobDirectory(ctx context.Context, cluster map[string]any, 
 		entries, err := collectionManifest(ctx, stage, true)
 		if err != nil {
 			return err
+		}
+		if !ownedEntries(stage, entries) {
+			return protocol.Fail("FILE_UNAVAILABLE", "Staged files do not match the ownership manifest", nil)
 		}
 		receipt := collectionReceipt{Remote: remote, Binding: fingerprint("collection", binding), Entries: entries}
 		if err := writeReceipt(receiptPath(final), receipt, false); err != nil {
@@ -268,15 +322,11 @@ func (s *Service) moveJobDirectory(ctx context.Context, cluster map[string]any, 
 		return protocol.Fail("FILE_UNAVAILABLE", "Collection source does not match its receipt", nil)
 	}
 	entries, err := collectionManifest(ctx, final, false)
-	if err != nil || !reflect.DeepEqual(entries, receipt.Entries) {
+	if err != nil || !reflect.DeepEqual(entries, receipt.Entries) || !ownedEntries(final, entries) {
 		return protocol.Fail("FILE_UNAVAILABLE", "Committed job directory no longer matches its receipt", nil)
 	}
 	if err := finishCollection(ctx, binding, remote, final); err != nil {
 		return err
-	}
-	if arrayDirectory(path.Base(remote)) {
-		target := transport.Create(binding)
-		_, _ = target.Run(ctx, []string{"rmdir", "--", path.Dir(remote)}, 30*time.Second, nil, false)
 	}
 	receipt.Cleaned = true
 	return writeReceipt(receiptPath(final), receipt, false)
@@ -284,18 +334,15 @@ func (s *Service) moveJobDirectory(ctx context.Context, cluster map[string]any, 
 
 func finishCollection(ctx context.Context, binding map[string]any, remote, final string) error {
 	target := transport.Create(binding)
-	// Move the source aside only after comparing it with the durable copy.
-	// A separate name also lets a later observation resume after interruption.
-	quarantine := remote + ".collected"
 	run := func(script string) (transport.Result, error) {
-		return target.Run(ctx, []string{"sh", "-c", script, "sh", remote, quarantine}, 30*time.Second, nil, false)
+		return target.Run(ctx, []string{"sh", "-c", script, "sh", remote, scheduler.ControlManifest}, 30*time.Second, nil, false)
 	}
-	check, err := run(`[ ! -L "${1%/*}" ] || exit 3
-for p in "$1" "$2"; do [ ! -L "$p" ] || exit 3; done
-if [ -d "$2" ]; then [ ! -e "$1" ] || exit 3; printf quarantine
-elif [ -d "$1" ]; then printf source
-elif [ ! -e "$1" ] && [ ! -e "$2" ]; then printf absent
-else exit 3; fi`)
+	check, err := run(`[ ! -L "${1%/*}" ] && [ ! -L "$1" ] || exit 3
+if [ ! -e "$1" ]; then printf absent
+elif [ ! -e "$1/$2" ] && [ ! -L "$1/$2" ]; then
+  rmdir -- "$1" || exit 3
+  printf absent
+else printf present; fi`)
 	if err != nil {
 		return err
 	}
@@ -305,29 +352,46 @@ else exit 3; fi`)
 	if check.Text() == "absent" {
 		return nil
 	}
-	if check.Text() == "source" {
-		if err := collectionRsync(ctx, binding, remote, final, true, false); err != nil {
-			return err
-		}
-		moved, err := run(`[ -d "$1" ] && [ ! -L "$1" ] && [ ! -e "$2" ] && [ ! -L "$2" ] && mv -- "$1" "$2"`)
-		if err != nil {
-			return err
-		}
-		if moved.ReturnCode != 0 {
-			return protocol.Fail("FILE_UNAVAILABLE", "Cannot isolate verified collection source", nil)
-		}
-	} else if check.Text() != "quarantine" {
-		return protocol.Fail("FILE_UNAVAILABLE", "Unexpected collection source status", nil)
-	}
-	if err := collectionRsync(ctx, binding, quarantine, final, true, true); err != nil {
+	check, err = run(ownedControl)
+	if err != nil {
 		return err
 	}
-	deleted, err := run(`[ ! -e "$1" ] && [ ! -L "$1" ] && [ -d "$2" ] && [ ! -L "$2" ] && rm -rf -- "$2"`)
+	if check.ReturnCode != 0 {
+		return protocol.Fail("FILE_UNAVAILABLE", "Source no longer matches its ownership manifest", nil)
+	}
+	if err := collectionRsync(ctx, binding, remote, final, true, true); err != nil {
+		return err
+	}
+	receipt, err := readCollectionReceipt(final)
+	if err != nil {
+		return err
+	}
+	// Only names actually committed can be removed, even after a partial cleanup.
+	names := ""
+	for name := range receipt.Entries {
+		if name != "." && name != scheduler.ControlManifest {
+			names += " " + name
+		}
+	}
+	deleted, err := target.Run(ctx, []string{"sh", "-c", ownedControl + `
+for f in "$1"/*; do
+  [ -e "$f" ] || continue
+  name=${f##*/}
+  [ "$name" = "$2" ] && continue
+  case " $3 " in *" $name "*) ;; *) exit 3;; esac
+done
+for name in $3; do
+  f=$1/$name
+  [ ! -L "$f" ] || exit 3
+  if [ -e "$f" ]; then [ -f "$f" ] && rm -- "$f" || exit 3; fi
+done
+rm -- "$1/$2" && rmdir -- "$1"
+`, "sh", remote, scheduler.ControlManifest, names}, 30*time.Second, nil, false)
 	if err != nil {
 		return err
 	}
 	if deleted.ReturnCode != 0 {
-		return protocol.Fail("FILE_UNAVAILABLE", "Cannot remove verified collection source", nil)
+		return protocol.Fail("FILE_UNAVAILABLE", "Cannot remove verified control files", nil)
 	}
 	return nil
 }

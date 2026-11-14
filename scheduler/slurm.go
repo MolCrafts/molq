@@ -174,7 +174,7 @@ func slurmLocationOptions(directory string, array bool) []string {
 	if array {
 		logs += "/%a"
 	}
-	return []string{"--chdir=" + directory, "--output=" + logs + "/stdout", "--error=" + logs + "/stderr"}
+	return []string{"--chdir=" + directory, "--output=" + logs + "/" + ControlDirectory + "/stdout", "--error=" + logs + "/" + ControlDirectory + "/stderr"}
 }
 
 func (s *Slurm) render(spec map[string]any, directives []string) (string, error) {
@@ -267,19 +267,8 @@ func (s *Slurm) Submit(ctx context.Context, spec map[string]any, directory strin
 		return Job{}, err
 	}
 	indices, _ := arrayIndices(spec)
-	// Slurm needs a shared working directory before it can open the logs.
-	mkdir := []string{"sh", "-c", `umask 077; root=$1; shift; mkdir -p -- "${root%/*}" && mkdir -- "$root" || exit 1; for index do mkdir -- "$root/$index" || exit 1; done`, "sh", directory}
-	for _, index := range indices {
-		mkdir = append(mkdir, itoa(index))
-	}
-	result, err := s.transport.Run(ctx, mkdir, 30*time.Second, nil, false)
-	if err != nil {
+	if err := s.prepareControl(ctx, directory, indices, "stdout stderr"); err != nil {
 		return Job{}, err
-	}
-	if result.ReturnCode != 0 {
-		return Job{}, protocol.Fail("FILE_UNAVAILABLE", "Cannot create Slurm job directory", map[string]any{
-			"path": directory, "stderr": string(result.Stderr[:min(len(result.Stderr), 4096)]),
-		})
 	}
 	// CLI options take precedence over inherited SBATCH_* settings.
 	argv := append([]string{"sbatch", "--parsable"}, slurmLocationOptions(directory, len(indices) != 0)...)
@@ -561,8 +550,8 @@ func slurmJob(row map[string]any, source string) (Job, error) {
 	stdout := stringField(row["standard_output"])
 	stderr := stringField(row["standard_error"])
 	if arrayIndex != "" && workdir != "" {
-		stdout = path.Join(workdir, "stdout")
-		stderr = path.Join(workdir, "stderr")
+		stdout = strings.ReplaceAll(stdout, "%a", arrayIndex)
+		stderr = strings.ReplaceAll(stderr, "%a", arrayIndex)
 	}
 	comment := row["comment"]
 	if object, ok := comment.(map[string]any); ok {

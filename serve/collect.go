@@ -12,6 +12,7 @@ import (
 
 	"github.com/MolCrafts/molq/protocol"
 	"github.com/MolCrafts/molq/scheduler"
+	"github.com/MolCrafts/molq/transport"
 )
 
 // jobIdentity is the name submit gives each job directory under JobRoot.
@@ -56,8 +57,8 @@ func (s *Service) collectTerminal(ctx context.Context, cluster map[string]any, j
 	}
 }
 
-// collect moves a terminal job's directory from an SSH target to the serve
-// host and returns the committed local copy, or "" when it is unavailable.
+// collect moves a terminal SSH job's owned control files to the serve host
+// and returns the committed local copy, or "" when it is unavailable.
 func (s *Service) collect(ctx context.Context, cluster map[string]any, job scheduler.Job) string {
 	archive := s.archive(cluster)
 	identity := collectable(job, archive)
@@ -96,7 +97,7 @@ func (s *Service) collect(ctx context.Context, cluster map[string]any, job sched
 		s.mu.Unlock()
 		close(done)
 	}()
-	if err := s.collectVerifiedJob(ctx, cluster, job, final); err != nil {
+	if err := s.collectVerifiedJob(ctx, cluster, job, root, final); err != nil {
 		fmt.Fprintf(os.Stderr, "molq serve: job directory %s stays on Cluster %s: %s\n", identity, stringField(cluster["name"]), mustJSON(asData(err)))
 		if !isDirectory(final) {
 			return ""
@@ -105,7 +106,7 @@ func (s *Service) collect(ctx context.Context, cluster map[string]any, job sched
 	return final
 }
 
-func (s *Service) collectVerifiedJob(ctx context.Context, cluster map[string]any, job scheduler.Job, final string) error {
+func (s *Service) collectVerifiedJob(ctx context.Context, cluster map[string]any, job scheduler.Job, root, final string) error {
 	ref, err := s.ref(cluster, job)
 	if err != nil {
 		return err
@@ -127,7 +128,18 @@ func (s *Service) collectVerifiedJob(ctx context.Context, cluster map[string]any
 	if current.Workdir == nil || path.Clean(*current.Workdir) != path.Clean(*job.Workdir) || !scheduler.Terminal(current.State) {
 		return protocol.Fail("FILE_UNAVAILABLE", "Current native evidence does not authorize collection", nil)
 	}
-	return s.moveJobDirectory(ctx, cluster, path.Clean(*job.Workdir), final)
+	remote := path.Join(path.Clean(*job.Workdir), scheduler.ControlDirectory)
+	target := transport.Create(clusterTransport(cluster))
+	base, err := resolveFilePath(ctx, target, root, "")
+	if err != nil {
+		return err
+	}
+	relative, _ := strings.CutPrefix(remote, root+"/")
+	resolved, err := resolveFilePath(ctx, target, remote, base)
+	if err != nil || resolved != path.Join(base, relative) {
+		return protocol.Fail("FILE_UNAVAILABLE", "Control directory is not at its managed path", nil)
+	}
+	return s.moveJobDirectory(ctx, cluster, resolved, final)
 }
 
 // collectedPath maps a path inside the job's observed directory to the
@@ -172,9 +184,8 @@ func (s *Service) setCollectionState(cluster, snapshot map[string]any, job sched
 		return
 	}
 	if identity := collectable(job, archive); identity != "" {
-		snapshot["collection_state"] = "pending"
 		final := filepath.Join(archive, identity)
-		if _, err := readCollectionReceipt(final); err == nil && isDirectory(final) {
+		if receipt, err := readCollectionReceipt(final); err == nil && path.Base(receipt.Remote) == scheduler.ControlDirectory && isDirectory(final) {
 			snapshot["collection_state"] = "committed"
 		}
 	}

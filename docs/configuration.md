@@ -101,11 +101,11 @@ RPC operations still require an explicit scope.
 ## Job directory retention
 
 `job_retention_days` (default `30`) applies to the newest modification
-anywhere in a managed job directory. Purge checks fresh native terminal
-evidence for local jobs. SSH sources are removed by verified collection.
-Only verified archives whose SSH cleanup finished are eligible for retention
-deletion, including archives of removed clusters. Unknown jobs, legacy
-archives without receipts and interrupted collections are kept.
+in the manifest-owned control directory. Purge checks fresh native terminal
+evidence for local jobs. SSH control files are removed by verified collection.
+Only verified control archives whose SSH cleanup finished are eligible for
+retention deletion. User files, directories without ownership manifests,
+legacy archives and interrupted collections are kept.
 `0` disables purging. Values are whole days from 0 to 36500.
 
 ```sh

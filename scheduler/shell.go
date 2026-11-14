@@ -39,7 +39,7 @@ func (s *Shell) Render(spec map[string]any, directory string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	d := quote(directory)
+	d := quote(path.Join(directory, ControlDirectory))
 	return `#!/usr/bin/env bash
 umask 077
 receipt_dir=` + d + `
@@ -55,16 +55,19 @@ finish() {
 trap finish EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
-cd -- "$receipt_dir" || exit 126
+cd -- "${receipt_dir%/*}" || exit 126
 ` + body, nil
 }
 
 func (s *Shell) Submit(ctx context.Context, spec map[string]any, directory string) (Job, error) {
+	if err := s.prepareControl(ctx, directory, nil, ControlFiles); err != nil {
+		return Job{}, err
+	}
 	scriptPath, err := s.stage(ctx, spec, directory, s.Validate, s.Render)
 	if err != nil {
 		return Job{}, err
 	}
-	script := "set -m; nohup bash " + quote(scriptPath) + " </dev/null >" + quote(directory+"/stdout") + " 2>" + quote(directory+"/stderr") + " &"
+	script := "set -m; nohup bash " + quote(scriptPath) + " </dev/null >" + quote(controlPath(directory, "stdout")) + " 2>" + quote(controlPath(directory, "stderr")) + " &"
 	if _, err := s.native(ctx, []string{"bash", "-c", script}, true, nil, false); err != nil {
 		return Job{}, err
 	}
@@ -102,7 +105,7 @@ func (s *Shell) QueryMany(ctx context.Context, ids []string) (map[string]Job, er
 	}
 	var collected []string
 	for _, identity := range ids {
-		if _, ok := jobs[identity]; ok || identity == "." || identity == ".." || path.Base(identity) != identity {
+		if job, ok := jobs[identity]; (ok && job.State != "unknown") || identity == "." || identity == ".." || path.Base(identity) != identity {
 			continue
 		}
 		if info, err := os.Stat(filepath.Join(s.archive, identity)); err == nil && info.IsDir() {
@@ -132,7 +135,7 @@ func (s *Shell) receipts(ctx context.Context, ids []string) (map[string]Job, err
 	}
 	var commands []string
 	for _, identity := range ids {
-		commands = append(commands, `d=`+s.directory(identity)+`; if [ -f "$d/launch" ]; then
+		commands = append(commands, `d=`+s.directory(identity)+`; work=$d; if [ -d "$d/.molq-control" ]; then d="$d/.molq-control"; fi; if [ -f "$d/launch" ]; then
 read -r pid < "$d/launch"
 start=$(sed -n '2p' "$d/launch")
 state=unknown; code=''
@@ -142,7 +145,7 @@ if [ -f "$d/exit" ]; then
   if [ -f "$d/cancel_requested" ] && { [ "$code" = 143 ] || [ "$code" = 130 ]; }; then state=cancelled; fi
 elif [ "$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null)" = "$start" ]; then state=running
 fi
-printf '%s|%s|%s|%s|%s|%s\n' `+quote(identity)+` "$pid" "$start" "$state" "$code" "$d"
+printf '%s|%s|%s|%s|%s|%s\n' `+quote(identity)+` "$pid" "$start" "$state" "$code" "$work"
 fi`)
 	}
 	text, err := s.native(ctx, []string{"bash", "-c", strings.Join(commands, "\n")}, false, nil, false)
@@ -180,7 +183,7 @@ fi`)
 }
 
 func (s *Shell) List(ctx context.Context) ([]Job, error) {
-	text, err := s.native(ctx, []string{"bash", "-c", `for d in ` + s.rootWord() + `/*; do [ -f "$d/launch" ] && [ ! -f "$d/exit" ] && basename "$d"; done; true`}, false, nil, false)
+	text, err := s.native(ctx, []string{"bash", "-c", `for d in ` + s.rootWord() + `/*; do c=$d; [ ! -d "$d/.molq-control" ] || c="$d/.molq-control"; [ -f "$c/launch" ] && [ ! -f "$c/exit" ] && basename "$d"; done; true`}, false, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +222,7 @@ func (s *Shell) Cancel(ctx context.Context, job Job) (map[string]any, error) {
 		return map[string]any{"outcome": "already_terminal"}, nil
 	}
 	script := `d=` + s.directory(job.NativeID) + `
+[ ! -d "$d/.molq-control" ] || d="$d/.molq-control"
 [ -f "$d/launch" ] || exit 2
 read -r pid < "$d/launch"
 start=$(sed -n '2p' "$d/launch")

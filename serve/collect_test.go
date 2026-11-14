@@ -45,7 +45,7 @@ exec sh -c "$*"
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func TestTerminalJobDirectoryMovesToServeHost(t *testing.T) {
+func TestTerminalCollectionPreservesUserOutputs(t *testing.T) {
 	loopbackSSH(t)
 	root := t.TempDir()
 	service, err := Open(filepath.Join(root, "registry.db"))
@@ -67,7 +67,7 @@ func TestTerminalJobDirectoryMovesToServeHost(t *testing.T) {
 		"cluster": cluster["id"],
 		"spec": map[string]any{"execution": map[string]any{"units": []any{map[string]any{
 			"id":      "main",
-			"command": map[string]any{"kind": "shell", "command": "echo molq09; echo done > result.txt"},
+			"command": map[string]any{"kind": "shell", "command": "echo molq09; echo done > result.txt; echo user > stdout"},
 		}}}},
 	})
 	if err != nil {
@@ -77,13 +77,19 @@ func TestTerminalJobDirectoryMovesToServeHost(t *testing.T) {
 	waitTerminal(t, service, ref)
 
 	local := filepath.Join(root, "collected", cluster["id"].(string), ref["native_id"].(string))
-	for _, name := range []string{"job.sh", "stdout", "launch", "exit", "result.txt"} {
+	for _, name := range []string{"job.sh", "stdout", "launch", "exit", scheduler.ControlManifest} {
 		if _, err := os.Stat(filepath.Join(local, name)); err != nil {
 			t.Fatalf("collected %s: %v", name, err)
 		}
 	}
-	if entries, err := os.ReadDir(target); err != nil || len(entries) != 0 {
-		t.Fatalf("target keeps %v, %v", entries, err)
+	work := filepath.Join(target, ref["native_id"].(string))
+	assertRetained(t, work, "result.txt")
+	assertRetained(t, work, "stdout")
+	if _, err := os.Stat(filepath.Join(work, scheduler.ControlDirectory)); !os.IsNotExist(err) {
+		t.Fatalf("target control directory remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(local, "result.txt")); !os.IsNotExist(err) {
+		t.Fatalf("user result was collected: %v", err)
 	}
 	again, err := service.Call("jobs.get", map[string]any{"ref": ref})
 	if err != nil {
@@ -147,13 +153,16 @@ func TestCollectionCopyFailureAndCleanupResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := filepath.Join(root, "target", oldJob)
+	remote := filepath.Join(root, "target", oldJob, scheduler.ControlDirectory)
 	final := filepath.Join(root, "archive", oldJob)
 	if err := os.MkdirAll(remote, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	payload := filepath.Join(remote, "data")
+	payload := filepath.Join(remote, "stdout")
 	if err := os.WriteFile(payload, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(remote, scheduler.ControlManifest), []byte("stdout stderr\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cluster := map[string]any{"id": "fixture", "transport": map[string]any{"kind": "ssh", "alias": "fixture"}}
@@ -176,29 +185,33 @@ func TestCollectionCopyFailureAndCleanupResume(t *testing.T) {
 	if err := service.moveJobDirectory(t.Context(), cluster, remote, final); err == nil {
 		t.Fatal("copy failure accepted")
 	}
-	assertRetained(t, remote, "data")
+	assertRetained(t, remote, "stdout")
 	if isDirectory(final) {
 		t.Fatal("failed copy published")
 	}
-	writeShim(`for word do
- case "$word" in *.collected/) exit 12;; esac
-done
+	counter := filepath.Join(root, "copy-counter")
+	t.Setenv("TEST_COPY_COUNTER", counter)
+	writeShim(`[ "$1" != "--server" ] || exec "$TEST_REAL_RSYNC" "$@"
+n=$(cat "$TEST_COPY_COUNTER" 2>/dev/null || echo 0)
+n=$((n+1))
+printf '%s' "$n" > "$TEST_COPY_COUNTER"
+[ "$n" -lt 3 ] || exit 12
 exec "$TEST_REAL_RSYNC" "$@"`)
-	// Fail after publishing the copy and isolating the verified source.
+	// Fail after publishing the copy before removing the verified source.
 	if err := service.moveJobDirectory(t.Context(), cluster, remote, final); err == nil {
 		t.Fatal("cleanup interruption not reported")
 	}
-	assertRetained(t, final, "data")
-	assertRetained(t, remote+".collected", "data")
-	if err := os.WriteFile(filepath.Join(remote+".collected", "data"), []byte("changed"), 0o600); err != nil {
+	assertRetained(t, final, "stdout")
+	assertRetained(t, remote, "stdout")
+	if err := os.WriteFile(filepath.Join(remote, "stdout"), []byte("changed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	writeShim(`exec "$TEST_REAL_RSYNC" "$@"`)
 	if err := service.moveJobDirectory(t.Context(), cluster, remote, final); err == nil {
 		t.Fatal("source changed after commit but cleanup proceeded")
 	}
-	assertRetained(t, remote+".collected", "data")
-	if err := os.WriteFile(filepath.Join(remote+".collected", "data"), []byte("original"), 0o600); err != nil {
+	assertRetained(t, remote, "stdout")
+	if err := os.WriteFile(filepath.Join(remote, "stdout"), []byte("original"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.Close(); err != nil {
@@ -216,7 +229,43 @@ exec "$TEST_REAL_RSYNC" "$@"`)
 	if err != nil || !receipt.Cleaned {
 		t.Fatalf("receipt = %+v, %v", receipt, err)
 	}
-	if _, err := os.Stat(remote + ".collected"); !os.IsNotExist(err) {
+	if _, err := os.Stat(remote); !os.IsNotExist(err) {
 		t.Fatalf("verified source remains: %v", err)
+	}
+}
+
+func TestCollectionRetainsLegacyAndUnlistedFiles(t *testing.T) {
+	loopbackSSH(t)
+	root := t.TempDir()
+	service, err := Open(filepath.Join(root, "registry.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	control := filepath.Join(root, oldJob, scheduler.ControlDirectory)
+	if err := os.MkdirAll(control, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"stdout", "user.txt"} {
+		if err := os.WriteFile(filepath.Join(control, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cluster := map[string]any{"id": "fixture", "transport": map[string]any{"kind": "ssh", "alias": "fixture"}}
+	final := filepath.Join(root, "archive", oldJob)
+	for _, marker := range []bool{false, true} {
+		if marker {
+			if err := os.WriteFile(filepath.Join(control, scheduler.ControlManifest), []byte("stdout stderr\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := service.moveJobDirectory(t.Context(), cluster, control, final); err != nil {
+			t.Fatal(err)
+		}
+		if isDirectory(final) {
+			t.Fatal("unowned contents were collected")
+		}
+		assertRetained(t, control, "stdout")
+		assertRetained(t, control, "user.txt")
 	}
 }
