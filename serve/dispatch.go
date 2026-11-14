@@ -180,6 +180,14 @@ func cleanDefinition(source map[string]any) (map[string]any, error) {
 }
 
 func (s *Service) submit(ctx context.Context, method string, params map[string]any) (any, error) {
+	key := stringField(params["request_key"])
+	if method == "jobs.submit" && key != "" {
+		if receipt, err := s.readSubmission(key); err == nil {
+			return s.recoverSubmission(ctx, params, receipt)
+		} else if !os.IsNotExist(err) {
+			return nil, submissionStoreError(key, err)
+		}
+	}
 	cluster, item, err := s.cluster(stringField(params["cluster"]))
 	if err != nil {
 		return nil, err
@@ -232,17 +240,39 @@ func (s *Service) submit(ctx context.Context, method string, params map[string]a
 	if currentRevision, _ := asInt(current["revision"]); currentRevision != revision {
 		return nil, protocol.Fail("CONFLICT", "Cluster changed before native submission", nil)
 	}
+	if key != "" {
+		return s.submitOnce(ctx, key, params, spec, cluster, item, directory, revision)
+	}
 	job, err := item.Submit(ctx, spec, directory)
 	if err != nil {
 		return nil, err
 	}
-	ref, err := s.ref(cluster, job)
-	if err != nil {
-		return nil, err
+	return s.submissionResult(cluster, job, revision)
+}
+
+func (s *Service) submissionResult(cluster map[string]any, job scheduler.Job, revision int) (map[string]any, error) {
+	if len(job.Members) == 0 {
+		ref, err := s.ref(cluster, job)
+		if err != nil {
+			return nil, err
+		}
+		value := Snapshot(ref, &job, nil)
+		s.obs.Remember(value)
+		return map[string]any{"ref": ref, "snapshot": value, "cluster_revision": revision, "outcome": "accepted"}, nil
 	}
-	value := Snapshot(ref, &job, nil)
-	s.obs.Remember(value)
-	return map[string]any{"ref": ref, "snapshot": value, "cluster_revision": revision, "outcome": "accepted"}, nil
+	refs := make([]map[string]any, 0, len(job.Members))
+	snapshots := make([]map[string]any, 0, len(job.Members))
+	for _, member := range job.Members {
+		ref, err := s.ref(cluster, member)
+		if err != nil {
+			return nil, err
+		}
+		value := Snapshot(ref, &member, nil)
+		s.obs.Remember(value)
+		refs = append(refs, ref)
+		snapshots = append(snapshots, value)
+	}
+	return map[string]any{"array_id": job.NativeID, "refs": refs, "snapshots": snapshots, "cluster_revision": revision, "outcome": "accepted"}, nil
 }
 
 // jobRoot resolves scheduler.JobRoot against the target login's home, since

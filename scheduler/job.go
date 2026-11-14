@@ -5,20 +5,22 @@ import "encoding/json"
 
 // Job is one native allocation observation.
 type Job struct {
-	NativeID    string
-	Incarnation string
-	State       string
-	Source      string
-	RawState    string
-	ExitCode    *int
-	Workdir     *string
-	Name        *string
-	StdoutPath  *string
-	StderrPath  *string
-	Comment     *string
-	SubmittedAt *string
-	StartedAt   *string
-	EndedAt     *string
+	NativeID      string
+	Members       []Job
+	FailureReason string
+	Incarnation   string
+	State         string
+	Source        string
+	RawState      string
+	ExitCode      *int
+	Workdir       *string
+	Name          *string
+	StdoutPath    *string
+	StderrPath    *string
+	Comment       *string
+	SubmittedAt   *string
+	StartedAt     *string
+	EndedAt       *string
 }
 
 // Terminal reports a confirmed finished state.

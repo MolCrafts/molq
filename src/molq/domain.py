@@ -68,6 +68,19 @@ class Resources(Value):
 
 
 @dataclass(frozen=True)
+class JobArray(Value):
+    """Indices and optional concurrency limit for a native Slurm job array.
+
+    Args:
+        indices (tuple[int, ...]): One to 64 unique nonnegative indices.
+        max_concurrent (int | None): Maximum simultaneously running elements.
+    """
+
+    indices: tuple[int, ...]
+    max_concurrent: int | None = None
+
+
+@dataclass(frozen=True)
 class Scheduling(Value):
     """Scheduling intent, independent of execution content.
 
@@ -83,6 +96,7 @@ class Scheduling(Value):
         dependencies (tuple[dict[str, Any], ...] | None): Each dependency supplies
             a registry-qualified ref and an explicit condition: after,
             after_success, after_failure or after_started.
+        array (JobArray | None): Optional native Slurm array.
     """
 
     name: str | None = None
@@ -94,6 +108,7 @@ class Scheduling(Value):
     priority: int | None = None
     exclusive: bool | None = None
     dependencies: tuple[dict[str, Any], ...] | None = None
+    array: JobArray | None = None
 
 
 @dataclass(frozen=True)

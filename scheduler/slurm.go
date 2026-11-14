@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"path"
 	"strings"
 	"time"
 
@@ -59,6 +60,9 @@ func (s *Slurm) launch(unit map[string]any, payload string) (string, error) {
 }
 
 func (s *Slurm) Validate(spec map[string]any) error {
+	if _, err := arrayIndices(spec); err != nil {
+		return err
+	}
 	if err := s.validateUnits(spec); err != nil {
 		return err
 	}
@@ -71,6 +75,19 @@ func (s *Slurm) Validate(spec map[string]any) error {
 		nodes = 1
 	}
 	units, _ := mapAny(spec["execution"])["units"].([]any)
+	if slurmParallel(mapAny(mapAny(spec["execution"])["plan"])) {
+		if nodes != 1 || len(anySlice(resources["accelerators"])) != 0 {
+			return unsupported("Parallel Slurm steps require one node and CPU-only resources")
+		}
+		if _, err := slurmStepMemory(resources); err != nil {
+			return err
+		}
+		for _, item := range units {
+			if mapAny(mapAny(item)["launch"])["kind"] == "mpi" && s.cluster["launcher"] != "srun" {
+				return unsupported("Parallel Slurm MPI steps require the srun launcher")
+			}
+		}
+	}
 	if nodes > 1 && len(units) > 1 {
 		for _, item := range units {
 			unit := mapAny(item)
@@ -104,6 +121,10 @@ func (s *Slurm) Validate(spec map[string]any) error {
 		threads, ok := AsInt(launch["threads"])
 		if !ok {
 			threads = 1
+		}
+		placement := mapAny(mapAny(item)["placement"])
+		if placed, ok := AsInt(placement["cpus_per_task"]); ok && placed > cpus {
+			return protocol.Fail("EXECUTION_RESOURCE_CONFLICT", "Placement exceeds CPUs per allocation task", nil)
 		}
 		if ranks > tasks || threads > cpus {
 			return protocol.Fail("EXECUTION_RESOURCE_CONFLICT", "MPI launch exceeds the allocation layout", nil)
@@ -139,7 +160,7 @@ func (s *Slurm) validateUnits(spec map[string]any) error {
 }
 
 func (s *Slurm) Render(spec map[string]any, directory string) (string, error) {
-	options := slurmLocationOptions(directory)
+	options := slurmLocationOptions(directory, mapAny(spec["scheduling"])["array"] != nil)
 	for i, option := range options {
 		flag, value, _ := strings.Cut(option, "=")
 		options[i] = flag + "=" + quote(value)
@@ -147,9 +168,12 @@ func (s *Slurm) Render(spec map[string]any, directory string) (string, error) {
 	return s.render(spec, options)
 }
 
-func slurmLocationOptions(directory string) []string {
+func slurmLocationOptions(directory string, array bool) []string {
 	// Slurm expands percent sequences in output and error filenames.
 	logs := strings.ReplaceAll(directory, "%", "%%")
+	if array {
+		logs += "/%a"
+	}
 	return []string{"--chdir=" + directory, "--output=" + logs + "/stdout", "--error=" + logs + "/stderr"}
 }
 
@@ -214,9 +238,20 @@ func (s *Slurm) render(spec map[string]any, directives []string) (string, error)
 		}
 		directives = append(directives, "--dependency="+strings.Join(parts, ","))
 	}
-	body, err := RenderExecution(spec, s.launch)
+	launch := s.launch
+	if slurmParallel(mapAny(mapAny(spec["execution"])["plan"])) {
+		memory, _ := slurmStepMemory(resources)
+		launch = func(unit map[string]any, payload string) (string, error) {
+			return s.launchIsolated(unit, payload, memory)
+		}
+	}
+	body, err := RenderExecution(spec, launch)
 	if err != nil {
 		return "", err
+	}
+	if indices, _ := arrayIndices(spec); len(indices) > 0 {
+		directives = append(directives, "--array="+arrayOption(spec, indices))
+		body = "cd -- \"${SLURM_ARRAY_TASK_ID:?missing array index}\" || exit 126\n" + body
 	}
 	return "#!/usr/bin/env bash\n" + prefix("#SBATCH ", directives) + body, nil
 }
@@ -226,8 +261,13 @@ func (s *Slurm) Submit(ctx context.Context, spec map[string]any, directory strin
 	if err != nil {
 		return Job{}, err
 	}
+	indices, _ := arrayIndices(spec)
 	// Slurm needs a shared working directory before it can open the logs.
-	result, err := s.transport.Run(ctx, []string{"sh", "-c", `umask 077; mkdir -p -- "${1%/*}" && mkdir -- "$1"`, "sh", directory}, 30*time.Second, nil, false)
+	mkdir := []string{"sh", "-c", `umask 077; root=$1; shift; mkdir -p -- "${root%/*}" && mkdir -- "$root" || exit 1; for index do mkdir -- "$root/$index" || exit 1; done`, "sh", directory}
+	for _, index := range indices {
+		mkdir = append(mkdir, itoa(index))
+	}
+	result, err := s.transport.Run(ctx, mkdir, 30*time.Second, nil, false)
 	if err != nil {
 		return Job{}, err
 	}
@@ -237,17 +277,28 @@ func (s *Slurm) Submit(ctx context.Context, spec map[string]any, directory strin
 		})
 	}
 	// CLI options take precedence over inherited SBATCH_* settings.
-	argv := append([]string{"sbatch", "--parsable"}, slurmLocationOptions(directory)...)
+	argv := append([]string{"sbatch", "--parsable"}, slurmLocationOptions(directory, len(indices) != 0)...)
+	name := stringField(mapAny(spec["scheduling"])["name"])
+	if name == "" {
+		name = "job.sh"
+	}
+	argv = append(argv, "--job-name="+name, "--no-requeue")
+	if len(indices) != 0 {
+		argv = append(argv, "--array="+arrayOption(spec, indices))
+	}
 	if comment, ok := mapAny(spec["scheduling"])["comment"].(string); ok {
 		argv = append(argv, "--comment", comment)
 	}
-	text, err := s.native(ctx, argv, true, []byte(script), true)
+	text, err := s.nativeWithLabel(ctx, append([]string{"env", "-u", "SBATCH_ARRAY_INX"}, argv...), "sbatch", true, []byte(script), true)
 	if err != nil {
 		return Job{}, err
 	}
 	identity := strings.Split(strings.TrimSpace(text), ";")[0]
 	if identity == "" || strings.IndexFunc(identity, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
 		return Job{}, protocol.FailOutcome("OUTCOME_UNKNOWN", "Cannot parse accepted allocation identity", "unknown", nil)
+	}
+	if len(indices) != 0 {
+		return s.acceptedArray(ctx, identity, indices)
 	}
 	return s.accepted(ctx, s.QueryMany, identity)
 }
@@ -256,7 +307,7 @@ func (s *Slurm) QueryMany(ctx context.Context, ids []string) (map[string]Job, er
 	if len(ids) == 0 {
 		return map[string]Job{}, nil
 	}
-	text, err := s.native(ctx, []string{"squeue", "--json", "--jobs", strings.Join(ids, ",")}, false, nil, false)
+	text, err := s.native(ctx, []string{"squeue", "--array", "--json", "--jobs", strings.Join(ids, ",")}, false, nil, false)
 	if err != nil {
 		item, ok := err.(*protocol.Error)
 		if !ok {
@@ -298,7 +349,7 @@ func (s *Slurm) QueryMany(ctx context.Context, ids []string) (map[string]Job, er
 }
 
 func (s *Slurm) List(ctx context.Context) ([]Job, error) {
-	text, err := s.native(ctx, []string{"squeue", "--me", "--json"}, false, nil, false)
+	text, err := s.native(ctx, []string{"squeue", "--me", "--array", "--json"}, false, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -377,11 +428,17 @@ func parseSlurmJobs(text, source string) ([]Job, error) {
 	}
 	jobs := make([]Job, 0, len(data.Jobs))
 	for _, row := range data.Jobs {
-		job, err := slurmJob(row, source)
+		rows, err := expandSlurmArrayRow(row, source)
 		if err != nil {
-			return nil, protocol.Fail("SCHEDULER_UNAVAILABLE", "Invalid/partial Slurm JSON response", nil)
+			return nil, err
 		}
-		jobs = append(jobs, job)
+		for _, member := range rows {
+			job, err := slurmJob(member, source)
+			if err != nil {
+				return nil, protocol.Fail("SCHEDULER_UNAVAILABLE", "Invalid/partial Slurm JSON response", nil)
+			}
+			jobs = append(jobs, job)
+		}
 	}
 	return jobs, nil
 }
@@ -405,6 +462,10 @@ func slurmJob(row map[string]any, source string) (Job, error) {
 	identity := stringField(row["job_id"])
 	if identity == "" || strings.IndexFunc(identity, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
 		return Job{}, protocol.Fail("SCHEDULER_UNAVAILABLE", "Invalid/partial Slurm JSON response", nil)
+	}
+	identity, arrayIndex, err := slurmIdentity(row, source, identity)
+	if err != nil {
+		return Job{}, err
 	}
 	var states any
 	if source == "queue" {
@@ -460,6 +521,15 @@ func slurmJob(row map[string]any, source string) (Job, error) {
 	if source == "queue" {
 		workdir = stringField(row["current_working_directory"])
 	}
+	if arrayIndex != "" && workdir != "" {
+		workdir = path.Join(workdir, arrayIndex)
+	}
+	stdout := stringField(row["standard_output"])
+	stderr := stringField(row["standard_error"])
+	if arrayIndex != "" && workdir != "" {
+		stdout = path.Join(workdir, "stdout")
+		stderr = path.Join(workdir, "stderr")
+	}
 	comment := row["comment"]
 	if object, ok := comment.(map[string]any); ok {
 		comment = object["job"]
@@ -473,8 +543,9 @@ func slurmJob(row map[string]any, source string) (Job, error) {
 	return Job{
 		NativeID: identity, Incarnation: incarnation, State: state, Source: source, RawState: raw,
 		ExitCode: exitCode, Workdir: strPtr(workdir), Name: strPtr(stringField(row["name"])),
-		StdoutPath: strPtr(stringField(row["standard_output"])), StderrPath: strPtr(stringField(row["standard_error"])),
-		Comment: commentPtr, SubmittedAt: submitted, StartedAt: started, EndedAt: ended,
+		StdoutPath: strPtr(stdout), StderrPath: strPtr(stderr),
+		FailureReason: slurmFailureReasons[token],
+		Comment:       commentPtr, SubmittedAt: submitted, StartedAt: started, EndedAt: ended,
 	}, nil
 }
 

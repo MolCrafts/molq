@@ -106,7 +106,9 @@ execution plan, supply a full `JobSpec` object. Request fields use snake_case.
 | `Molq` | Registry, saved references, batches, direct RPC and connection lifetime |
 
 All durations, including wait, RPC timeout and status `maxAge`, are **seconds**. Save
-`job.ref` to return later. Closing a connection leaves accepted jobs running.
+`job.ref` to return later. Array submissions return a `JobCollection` with
+`refs` for its elements. Closing a connection leaves accepted jobs running.
 
 `MolqError` carries structured error data. An unknown mutation outcome must be
-reconciled before another submission.
+reconciled before another submission. Repeat the original request with its
+supplied request key to reconcile across serve restarts.

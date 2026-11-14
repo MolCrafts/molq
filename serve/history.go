@@ -150,7 +150,7 @@ func completing(job scheduler.Job) bool {
 		return false
 	}
 	for _, flag := range strings.Split(raw, ",") {
-		if strings.TrimRight(strings.Fields(flag)[0], "+") == "COMPLETING" {
+		if fields := strings.Fields(flag); len(fields) != 0 && strings.TrimRight(fields[0], "+") == "COMPLETING" {
 			return true
 		}
 	}

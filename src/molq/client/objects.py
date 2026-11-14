@@ -418,16 +418,16 @@ class Cluster:
         spec: JobSpec,
         *,
         request_key: str | None = None,
-    ) -> Job:
-        """Submit one allocation described by a JobSpec.
+    ) -> Job | JobCollection:
+        """Submit one allocation or a native array.
 
         Args:
             spec (JobSpec): Immutable allocation specification.
-            request_key (str | None): Optional bounded deduplication key within
-                the current serve instance; it does not survive runtime restart.
+            request_key (str | None): Optional durable key. Repeating the same
+                request reconciles the prior submission without resending it.
 
         Returns:
-            Job: A handle for the accepted native allocation.
+            Job | JobCollection: One allocation or the accepted array elements.
 
         Raises:
             MolqError: The request is not a JobSpec, the runtime or
@@ -443,6 +443,8 @@ class Cluster:
             spec=_job_spec(spec),
             request_key=request_key,
         )
+        if "refs" in result:
+            return JobCollection(self.molq, result["refs"])
         return Job(self.molq, result["ref"])
 
     def transfer(

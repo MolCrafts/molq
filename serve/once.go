@@ -20,7 +20,7 @@ type remembered struct {
 
 func (s *Service) callDeduped(method string, params map[string]any) (any, error) {
 	key := stringField(params["request_key"])
-	if key == "" || (method != "jobs.submit" && method != "jobs.cancel") {
+	if key == "" || method != "jobs.cancel" {
 		return s.invoke(method, params)
 	}
 	fingerprint := fingerprint(method, params)

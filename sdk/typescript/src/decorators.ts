@@ -1,5 +1,5 @@
 /** Destination decorators over the public RPC client. */
-import { Cluster, Job, Molq, MolqError } from "./index.js";
+import { Cluster, type Job, type JobCollection, Molq, MolqError } from "./index.js";
 import type { ClusterDefinition, JobSpec } from "./types.js";
 export type SubmitOptions = Partial<Omit<ClusterDefinition, "name" | "scheduler">> & {
     endpoint?: string;
@@ -7,9 +7,9 @@ export type SubmitOptions = Partial<Omit<ClusterDefinition, "name" | "scheduler"
     timeout?: number;
     registryId?: string;
 };
-/** Wrap a generator: each yielded JobSpec receives its submitted Job. */
+/** Wrap a generator: each yielded JobSpec receives a Job or JobCollection. */
 export type Destination = Cluster & {
-    <Args extends unknown[], Result>(builder: (...args: Args) => Generator<JobSpec, Result, Job>): (...args: Args) => Promise<Result>;
+    <Args extends unknown[], Result>(builder: (...args: Args) => Generator<JobSpec, Result, Job | JobCollection>): (...args: Args) => Promise<Result>;
     <Args extends unknown[], Result>(builder: (...args: Args) => Result): (...args: Args) => Promise<Awaited<Result>>;
 };
 function invalid(message: string): MolqError {
@@ -50,7 +50,7 @@ export async function bindDestination(mq: Molq, name: string, kind?: ClusterDefi
                 cluster = await mq.clusters.register({ name, ...expected });
             }
         }
-        const decorate = function <Args extends unknown[], Result>(builder: (...args: Args) => Generator<JobSpec, Result, Job>): (...args: Args) => Promise<Result> {
+        const decorate = function <Args extends unknown[], Result>(builder: (...args: Args) => Generator<JobSpec, Result, Job | JobCollection>): (...args: Args) => Promise<Result> {
             if (typeof builder !== "function" || ["[object AsyncGeneratorFunction]", "[object AsyncFunction]"].includes(Object.prototype.toString.call(builder)))
                 throw new TypeError("Decorate a synchronous generator function");
             return async function (this: unknown, ...args: Args): Promise<Result> {

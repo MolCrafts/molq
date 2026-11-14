@@ -6,6 +6,7 @@ from molq.domain import (
     Accelerator,
     Execution,
     ExecutionUnit,
+    JobArray,
     JobSpec,
     Launch,
     Parallel,
@@ -36,6 +37,7 @@ __all__ = [
     "UnitRef",
     "Sequence",
     "Parallel",
+    "JobArray",
     "JobSpec",
 ]
 

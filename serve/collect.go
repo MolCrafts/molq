@@ -7,8 +7,10 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
+	"github.com/MolCrafts/molq/protocol"
 	"github.com/MolCrafts/molq/scheduler"
 )
 
@@ -32,12 +34,17 @@ func collectable(job scheduler.Job, archive string) string {
 		return ""
 	}
 	dir := path.Clean(*job.Workdir)
-	identity, parent := path.Base(dir), path.Dir(dir)
-	onTarget := strings.HasSuffix(parent, "/"+scheduler.JobRoot)
-	if !jobIdentity.MatchString(identity) || !(onTarget || (archive != "" && parent == filepath.ToSlash(archive))) {
-		return ""
+	parent := path.Dir(dir)
+	if strings.HasSuffix(parent, "/"+scheduler.JobRoot) || (archive != "" && parent == filepath.ToSlash(archive)) {
+		if jobIdentity.MatchString(path.Base(dir)) {
+			return path.Base(dir)
+		}
 	}
-	return identity
+	if _, index, ok := strings.Cut(job.NativeID, "_"); ok && index == path.Base(dir) &&
+		strings.HasSuffix(path.Dir(parent), "/"+scheduler.JobRoot) && jobIdentity.MatchString(path.Base(parent)) && arrayDirectory(index) {
+		return path.Base(parent) + "_" + index
+	}
+	return ""
 }
 
 // collectTerminal collects every terminal job in one observation. Callers must
@@ -89,13 +96,38 @@ func (s *Service) collect(ctx context.Context, cluster map[string]any, job sched
 		s.mu.Unlock()
 		close(done)
 	}()
-	if err := s.moveJobDirectory(ctx, cluster, path.Clean(*job.Workdir), final); err != nil {
+	if err := s.collectVerifiedJob(ctx, cluster, job, final); err != nil {
 		fmt.Fprintf(os.Stderr, "molq serve: job directory %s stays on Cluster %s: %s\n", identity, stringField(cluster["name"]), mustJSON(asData(err)))
 		if !isDirectory(final) {
 			return ""
 		}
 	}
 	return final
+}
+
+func (s *Service) collectVerifiedJob(ctx context.Context, cluster map[string]any, job scheduler.Job, final string) error {
+	ref, err := s.ref(cluster, job)
+	if err != nil {
+		return err
+	}
+	id := stringField(cluster["id"])
+	_, item, err := s.cluster(id)
+	if err != nil {
+		return err
+	}
+	release, err := s.acquire(ctx, id)
+	if err != nil {
+		return err
+	}
+	defer release()
+	current, err := s.identity(ctx, item, ref)
+	if err != nil {
+		return err
+	}
+	if current.Workdir == nil || path.Clean(*current.Workdir) != path.Clean(*job.Workdir) || !scheduler.Terminal(current.State) {
+		return protocol.Fail("FILE_UNAVAILABLE", "Current native evidence does not authorize collection", nil)
+	}
+	return s.moveJobDirectory(ctx, cluster, path.Clean(*job.Workdir), final)
 }
 
 // collectedPath maps a path inside the job's observed directory to the
@@ -112,11 +144,23 @@ func collectedPath(local string, workdir *string, target string) (string, bool) 
 }
 
 func managedJobPath(root, dir string) bool {
-	return path.Dir(dir) == root && jobIdentity.MatchString(path.Base(dir))
+	parent := path.Dir(dir)
+	return (parent == root && jobIdentity.MatchString(path.Base(dir))) ||
+		(path.Dir(parent) == root && jobIdentity.MatchString(path.Base(parent)) && arrayDirectory(path.Base(dir)))
+}
+
+func arrayDirectory(name string) bool {
+	value, err := strconv.ParseUint(name, 10, 31)
+	return err == nil && strconv.FormatUint(value, 10) == name
+}
+
+func archiveIdentity(name string) bool {
+	parent, index, array := strings.Cut(name, "_")
+	return jobIdentity.MatchString(parent) && (!array || arrayDirectory(index))
 }
 
 func isDirectory(name string) bool {
-	info, err := os.Stat(name)
+	info, err := os.Lstat(name)
 	return err == nil && info.IsDir()
 }
 

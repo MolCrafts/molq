@@ -73,6 +73,13 @@ class Dependency(TypedDict):
     condition: Literal["after", "after_success", "after_failure", "after_started"]
 
 
+class JobArray(TypedDict):
+    """Canonical wire shape."""
+
+    indices: list[int]
+    max_concurrent: NotRequired[int]
+
+
 class Scheduling(TypedDict):
     """Canonical wire shape."""
 
@@ -84,6 +91,7 @@ class Scheduling(TypedDict):
     reservation: NotRequired[str]
     priority: NotRequired[int]
     exclusive: NotRequired[bool]
+    array: NotRequired[JobArray]
     dependencies: NotRequired[list[Dependency]]
 
 
@@ -153,7 +161,7 @@ class Defaults(TypedDict):
     """Canonical wire shape."""
 
     resources: NotRequired[Resources]
-    scheduling: NotRequired[Scheduling]
+    scheduling: NotRequired[SchedulingDefaults]
     env: NotRequired[dict[str, str]]
     cwd: NotRequired[str]
 
@@ -183,6 +191,20 @@ class ClusterDefinition(TypedDict):
     defaults: NotRequired[Defaults]
     launcher: NotRequired[Literal["srun", "mpirun", "mpiexec"]]
     pbs_dialect: NotRequired[Literal["openpbs"]]
+
+
+class SchedulingDefaults(TypedDict):
+    """Canonical wire shape."""
+
+    name: NotRequired[str]
+    comment: NotRequired[str]
+    partition: NotRequired[str]
+    account: NotRequired[str]
+    qos: NotRequired[str]
+    reservation: NotRequired[str]
+    priority: NotRequired[int]
+    exclusive: NotRequired[bool]
+    dependencies: NotRequired[list[Dependency]]
 
 
 class ErrorData(TypedDict):
@@ -221,6 +243,18 @@ class JobSnapshot(TypedDict):
     source: Literal["queue", "accounting", "shell_receipt", "absent", "unavailable"]
     raw_state: str
     collection_state: NotRequired[Literal["pending", "committed"]]
+    failure_reason: NotRequired[
+        Literal[
+            "out_of_memory",
+            "node_failure",
+            "preempted",
+            "timeout",
+            "cancelled",
+            "boot_failure",
+            "deadline",
+            "failed",
+        ]
+    ]
     exit_code: int | None
     name: NotRequired[str | None]
     comment: NotRequired[str | None]

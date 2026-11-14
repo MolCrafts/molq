@@ -111,14 +111,13 @@ var commandHelp = map[string]string{
   --state may be repeated. On a terminal, list prints a table; --json prints
   the JSON object. Use argv or --spec, not both. --name and --comment are
   only for argv; a spec already carries scheduling. --request-key repeats the
-  same submit inside one serve process. --ref is a JobRef object, or @file.
+  same submit across serve restarts. --ref is a JobRef object, or @file.
   History times are RFC3339 with a timezone. --refs cannot be combined with
   range filters. wait polls until the job is confirmed finished or the timeout
   expires; the job keeps running if this command stops. cancel asks the
   scheduler to cancel. An accepted result is not proof the job has stopped.
-  purge deletes job directories whose newest change is older than
-  job_retention_days (default 30; 0 disables), on each cluster target and in
-  the serve host's collected/ archive.`,
+  purge deletes verified terminal local directories and completed archives
+  older than job_retention_days (default 30; 0 disables).`,
 	"transfer": `molq transfer [RSYNC_OPTION...] SRC... DEST
 
   rsync syntax. SRC and DEST are CLUSTER:PATH or a local PATH, the way rsync

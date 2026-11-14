@@ -210,6 +210,31 @@
       ],
       "additionalProperties": false
     },
+    "JobArray": {
+      "type": "object",
+      "properties": {
+        "indices": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "max_concurrent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        }
+      },
+      "required": [
+        "indices"
+      ],
+      "additionalProperties": false
+    },
     "Scheduling": {
       "type": "object",
       "properties": {
@@ -244,6 +269,9 @@
         },
         "exclusive": {
           "type": "boolean"
+        },
+        "array": {
+          "$ref": "#/$defs/JobArray"
         },
         "dependencies": {
           "type": "array",
@@ -449,7 +477,7 @@
           "$ref": "#/$defs/Resources"
         },
         "scheduling": {
-          "$ref": "#/$defs/Scheduling"
+          "$ref": "#/$defs/SchedulingDefaults"
         },
         "env": {
           "type": "object",
@@ -540,6 +568,52 @@
         "name",
         "scheduler"
       ],
+      "additionalProperties": false
+    },
+    "SchedulingDefaults": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "comment": {
+          "type": "string",
+          "maxLength": 4094
+        },
+        "partition": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "account": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "qos": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "reservation": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "exclusive": {
+          "type": "boolean"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Dependency"
+          },
+          "maxItems": 256
+        }
+      },
+      "required": [],
       "additionalProperties": false
     },
     "ErrorData": {
@@ -657,6 +731,18 @@
           "enum": [
             "pending",
             "committed"
+          ]
+        },
+        "failure_reason": {
+          "enum": [
+            "out_of_memory",
+            "node_failure",
+            "preempted",
+            "timeout",
+            "cancelled",
+            "boot_failure",
+            "deadline",
+            "failed"
           ]
         },
         "exit_code": {

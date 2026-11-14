@@ -100,10 +100,16 @@ export class Cluster {
             options,
         });
     }
-    /** Submit one JobSpec allocation and return its accepted Job handle. */
-    async submit(spec: RequestSpec, requestKey?: string): Promise<Job> { checkSpec(spec); const value = await this.molq.rpc<{
-        ref: JobRef;
-    }>("jobs.submit", { cluster: this.name, spec, ...(requestKey ? { request_key: requestKey } : {}) }); return this.molq.job(value.ref); }
+    /** Submit one allocation or a native array. A supplied key survives restart. */
+    submit(spec: JobSpec & { scheduling?: { array?: undefined } }, requestKey?: string): Promise<Job>;
+    submit(spec: JobSpec & { scheduling: { array: NonNullable<NonNullable<JobSpec["scheduling"]>["array"]> } }, requestKey?: string): Promise<JobCollection>;
+    submit(spec: JobSpec, requestKey?: string): Promise<Job | JobCollection>;
+    async submit(spec: JobSpec, requestKey?: string): Promise<Job | JobCollection> {
+        checkSpec(spec);
+        const value = await this.molq.rpc<{ref: JobRef} | {refs: JobRef[]}>(
+            "jobs.submit", { cluster: this.name, spec, ...(requestKey ? { request_key: requestKey } : {}) });
+        return "refs" in value ? this.molq.jobs(value.refs) : this.molq.job(value.ref);
+    }
     /** Validate schema and native representation without probing resources. */
     async validate(spec: RequestSpec): Promise<unknown> { checkSpec(spec); return this.molq.rpc("jobs.validate", { cluster: this.name, spec }); }
     /** Render one JobSpec without submitting an allocation. */

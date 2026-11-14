@@ -143,9 +143,27 @@ dependent = JobSpec(
 Conditions are `after`, `after_success`, `after_failure`, and `after_started`.
 The scheduler must support the requested condition exactly; see [mappings](schedulers.md#scheduler-mappings).
 
-Save `job.ref` after submission. If a mutation returns `OUTCOME_UNKNOWN`, inspect
-native state before submitting again. A `request_key` deduplicates only within
-the same service for a bounded interval; it does not survive a restart.
+Save `job.ref` after submission, or `collection.refs` for an array. Provide a
+`request_key` to make one submission recoverable across serve restarts. Repeat
+the same request and key to retrieve its receipt or reconcile with native
+evidence. An unresolved submission returns `OUTCOME_UNKNOWN` and repeating
+the key never resends it. Different parameters with the same key conflict.
+Cancel keys remain scoped to one serve instance.
+
+### Slurm job arrays
+
+Set `Scheduling(array=JobArray((0, 1, 4), max_concurrent=2))` on a job spec.
+Slurm receives one submission and runs each index in its own working directory.
+The payload can read `SLURM_ARRAY_TASK_ID`. Python and TypeScript return a
+`JobCollection`; CLI and RPC return `array_id`, `refs`, and `snapshots`.
+Each element reference can be used independently for status, logs, dependencies,
+and cancellation. The supported request size is 1–64 elements. Slurm decides
+which indices and concurrency limits the site accepts.
+
+For a Slurm plan with parallel branches, request one node, explicit tasks and
+memory, and CPU-only resources. Each step receives its own CPU allocation
+and a share of the requested memory proportional to its CPU count. Parallel
+MPI uses the cluster's explicit `srun` launcher.
 
 ## Job directory retention
 

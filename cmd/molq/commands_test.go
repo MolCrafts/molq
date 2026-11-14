@@ -58,7 +58,7 @@ set -eu
 stdout=$SBATCH_OUTPUT
 for arg do
   case "$arg" in
-    --parsable) ;;
+    --parsable|--job-name=*|--no-requeue) ;;
     --chdir=*) directory=${arg#*=} ;;
     --output=*) stdout=${arg#*=} ;;
     --error=*) stderr=${arg#*=} ;;
@@ -156,7 +156,7 @@ func TestTransferTakesRsyncSyntax(t *testing.T) {
 	}
 }
 
-func TestPurgeDeletesOldJobDirectories(t *testing.T) {
+func TestPurgeKeepsUnverifiedOldJobDirectories(t *testing.T) {
 	binary, err := clientExecutable()
 	if err != nil {
 		t.Fatal(err)
@@ -181,11 +181,11 @@ func TestPurgeDeletesOldJobDirectories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("purge: %v\n%s", err, output)
 	}
-	if !strings.Contains(string(output), `"removed":["`+identity+`"]`) {
+	if !strings.Contains(string(output), `"removed":[]`) {
 		t.Fatalf("purge output = %s", output)
 	}
-	if _, err := os.Stat(directory); !os.IsNotExist(err) {
-		t.Fatalf("old job directory kept: %v", err)
+	if _, err := os.Stat(directory); err != nil {
+		t.Fatalf("unverified job directory removed: %v", err)
 	}
 	if output, err := exec.Command(binary, "--registry", registry, "job", "purge", "a", "b").CombinedOutput(); err == nil {
 		t.Fatalf("purge with two clusters succeeded: %s", output)

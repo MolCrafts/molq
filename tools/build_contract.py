@@ -93,6 +93,19 @@ defs = {
         },
         ["ref", "condition"],
     ),
+    "JobArray": obj(
+        {
+            "indices": {
+                "type": "array",
+                "items": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": True,
+            },
+            "max_concurrent": {"type": "integer", "minimum": 1, "maximum": 64},
+        },
+        ["indices"],
+    ),
     "Scheduling": obj(
         {
             "name": identifier,
@@ -103,6 +116,7 @@ defs = {
             "reservation": identifier,
             "priority": {"type": "integer", "minimum": 0, "maximum": 1000000},
             "exclusive": {"type": "boolean"},
+            "array": ref("JobArray"),
             "dependencies": {
                 "type": "array",
                 "items": ref("Dependency"),
@@ -170,7 +184,7 @@ defs = {
     "Defaults": obj(
         {
             "resources": ref("Resources"),
-            "scheduling": ref("Scheduling"),
+            "scheduling": ref("SchedulingDefaults"),
             "env": env,
             "cwd": string,
         }
@@ -193,6 +207,14 @@ defs = {
         ["name", "scheduler"],
     ),
 }
+defs["SchedulingDefaults"] = obj(
+    {
+        name: schema
+        for name, schema in defs["Scheduling"]["properties"].items()
+        if name != "array"
+    }
+)
+
 defs.update(
     {
         "ErrorData": obj(
@@ -246,6 +268,18 @@ defs.update(
                 },
                 "raw_state": {"type": "string"},
                 "collection_state": {"enum": ["pending", "committed"]},
+                "failure_reason": {
+                    "enum": [
+                        "out_of_memory",
+                        "node_failure",
+                        "preempted",
+                        "timeout",
+                        "cancelled",
+                        "boot_failure",
+                        "deadline",
+                        "failed",
+                    ]
+                },
                 "exit_code": {"type": ["integer", "null"]},
                 **{
                     field: {"type": ["string", "null"]}

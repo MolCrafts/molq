@@ -19,7 +19,6 @@ const (
 	defaultRetentionDays = 30
 	// PurgeInterval is how often a listening serve process purges.
 	PurgeInterval = 24 * time.Hour
-	purgeTimeout  = 120 * time.Second
 	purgeDeadline = 10 * time.Minute
 )
 
@@ -167,7 +166,7 @@ func (s *Service) purgeTarget(ctx context.Context, cluster map[string]any, cutof
 			return false, nil
 		}
 		return true, nil
-	}, ".terminal.json")
+	}, ".terminal.json", false)
 }
 
 func (s *Service) rememberTerminalDirectory(ctx context.Context, cluster map[string]any, job scheduler.Job) {
@@ -213,10 +212,10 @@ func purgeArchive(ctx context.Context, root string, cutoff time.Time) ([]string,
 		}
 		entries, err := collectionManifest(ctx, directory, false)
 		return err == nil && reflect.DeepEqual(entries, receipt.Entries), err
-	}, ".receipt.json")
+	}, ".receipt.json", true)
 }
 
-func purgeDirectories(root string, cutoff time.Time, confirmed func(string) (bool, error), sidecar string) ([]string, error) {
+func purgeDirectories(root string, cutoff time.Time, confirmed func(string) (bool, error), sidecar string, archive bool) ([]string, error) {
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -225,33 +224,56 @@ func purgeDirectories(root string, cutoff time.Time, confirmed func(string) (boo
 		return nil, protocol.Fail("FILE_UNAVAILABLE", "Cannot read the job directory archive", map[string]any{"path": root})
 	}
 	var removed, failed []string
-	for _, entry := range entries {
-		if !entry.IsDir() || !jobIdentity.MatchString(entry.Name()) {
-			continue
-		}
-		directory := filepath.Join(root, entry.Name())
+	remove := func(directory, identity string) {
 		newest, err := newestModification(directory)
 		if err != nil {
-			failed = append(failed, entry.Name())
-			continue
+			failed = append(failed, identity)
+			return
 		}
 		if newest.After(cutoff) {
-			continue
+			return
 		}
 		safe, err := confirmed(directory)
 		if err != nil {
-			failed = append(failed, entry.Name())
-			continue
+			failed = append(failed, identity)
+			return
 		}
 		if !safe {
-			continue
+			return
+		}
+		if newest, err := newestModification(directory); err != nil || newest.After(cutoff) {
+			return
 		}
 		if err := os.RemoveAll(directory); err != nil {
-			failed = append(failed, entry.Name())
-			continue
+			failed = append(failed, identity)
+			return
 		}
 		_ = os.Remove(directory + sidecar)
-		removed = append(removed, entry.Name())
+		removed = append(removed, identity)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() || (!archive && !jobIdentity.MatchString(name)) || (archive && !archiveIdentity(name)) {
+			continue
+		}
+		directory := filepath.Join(root, name)
+		remove(directory, name)
+		if archive {
+			continue
+		}
+		children, err := os.ReadDir(directory)
+		if err != nil {
+			continue
+		}
+		for _, child := range children {
+			if child.IsDir() && arrayDirectory(child.Name()) {
+				remove(filepath.Join(directory, child.Name()), name+"_"+child.Name())
+			}
+		}
+		if len(children) > 0 {
+			// Only a genuinely empty parent can be removed here.
+			_ = os.Remove(directory)
+		}
 	}
 	if len(failed) > 0 {
 		sort.Strings(failed)

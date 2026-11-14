@@ -38,6 +38,10 @@ func withCommand(item *protocol.Error, command string) *protocol.Error {
 }
 
 func (c *core) native(ctx context.Context, argv []string, mutation bool, input []byte, hasInput bool) (string, error) {
+	return c.nativeWithLabel(ctx, argv, argv[0], mutation, input, hasInput)
+}
+
+func (c *core) nativeWithLabel(ctx context.Context, argv []string, command string, mutation bool, input []byte, hasInput bool) (string, error) {
 	result, err := c.transport.Run(ctx, argv, 30*time.Second, input, hasInput)
 	if err != nil {
 		item, ok := err.(*protocol.Error)
@@ -51,16 +55,16 @@ func (c *core) native(ctx context.Context, argv []string, mutation bool, input [
 		// Authentication never ran the scheduler command. A dropped connection
 		// after dispatch still leaves a mutation outcome unknown.
 		if mutation && dispatched && item.Kind != "AUTH_REQUIRED" && item.Kind != "PERMISSION_DENIED" {
-			extra := map[string]any{"command": argv[0]}
+			extra := map[string]any{"command": command}
 			if diagnostic, ok := item.Context["diagnostic"]; ok {
 				extra["diagnostic"] = diagnostic
 			}
 			return "", protocol.FailOutcome("OUTCOME_UNKNOWN", "Native mutation outcome is unknown", "unknown", extra)
 		}
 		if explainedTransport(item.Kind) {
-			return "", withCommand(item, argv[0])
+			return "", withCommand(item, command)
 		}
-		extra := map[string]any{"command": argv[0], "cause": item.Kind, "detail": item.Message}
+		extra := map[string]any{"command": command, "cause": item.Kind, "detail": item.Message}
 		if diagnostic, ok := item.Context["diagnostic"]; ok {
 			extra["diagnostic"] = diagnostic
 		}
@@ -80,7 +84,7 @@ func (c *core) native(ctx context.Context, argv []string, mutation bool, input [
 			stderr = stderr[:4096]
 		}
 		return "", protocol.FailOutcome(kind, "Native scheduler command failed", outcome, map[string]any{
-			"command": argv[0], "returncode": result.ReturnCode, "stderr": string(stderr),
+			"command": command, "returncode": result.ReturnCode, "stderr": string(stderr),
 		})
 	}
 	return result.Text(), nil
@@ -125,6 +129,9 @@ func (c *core) launch(unit map[string]any, payload string) (string, error) {
 }
 
 func (c *core) validate(spec map[string]any) error {
+	if mapAny(spec["scheduling"])["array"] != nil {
+		return unsupported("This scheduler cannot represent native job arrays")
+	}
 	units, _ := mapAny(spec["execution"])["units"].([]any)
 	for _, item := range units {
 		if _, err := c.launch(mapAny(item), "true"); err != nil {

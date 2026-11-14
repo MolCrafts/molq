@@ -39,6 +39,9 @@ func Snapshot(ref map[string]any, job *scheduler.Job, failure map[string]any) ma
 		"name": name, "comment": comment, "submitted_at": submitted,
 		"started_at": started, "ended_at": ended,
 	}
+	if job != nil && job.FailureReason != "" && scheduler.Terminal(state) {
+		result["failure_reason"] = job.FailureReason
+	}
 	if failure != nil {
 		result["error"] = failure
 		result["freshness"] = map[string]any{"status": "unavailable", "age_seconds": 0}

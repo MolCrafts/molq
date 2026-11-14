@@ -139,3 +139,84 @@ func waitTerminal(t *testing.T, service *Service, ref map[string]any) {
 	}
 	t.Fatal("job did not finish")
 }
+
+func TestCollectionCopyFailureAndCleanupResume(t *testing.T) {
+	loopbackSSH(t)
+	root := t.TempDir()
+	service, err := Open(filepath.Join(root, "registry.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := filepath.Join(root, "target", oldJob)
+	final := filepath.Join(root, "archive", oldJob)
+	if err := os.MkdirAll(remote, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	payload := filepath.Join(remote, "data")
+	if err := os.WriteFile(payload, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cluster := map[string]any{"id": "fixture", "transport": map[string]any{"kind": "ssh", "alias": "fixture"}}
+	real, err := exec.LookPath("rsync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	shim := filepath.Join(bin, "rsync")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TEST_REAL_RSYNC", real)
+	writeShim := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(shim, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeShim(`"$TEST_REAL_RSYNC" "$@" >/dev/null; exit 23`)
+	// A failed transfer cannot authorize deletion or a published archive.
+	if err := service.moveJobDirectory(t.Context(), cluster, remote, final); err == nil {
+		t.Fatal("copy failure accepted")
+	}
+	assertRetained(t, remote, "data")
+	if isDirectory(final) {
+		t.Fatal("failed copy published")
+	}
+	writeShim(`for word do
+ case "$word" in *.collected/) exit 12;; esac
+done
+exec "$TEST_REAL_RSYNC" "$@"`)
+	// Fail after publishing the copy and isolating the verified source.
+	if err := service.moveJobDirectory(t.Context(), cluster, remote, final); err == nil {
+		t.Fatal("cleanup interruption not reported")
+	}
+	assertRetained(t, final, "data")
+	assertRetained(t, remote+".collected", "data")
+	if err := os.WriteFile(filepath.Join(remote+".collected", "data"), []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeShim(`exec "$TEST_REAL_RSYNC" "$@"`)
+	if err := service.moveJobDirectory(t.Context(), cluster, remote, final); err == nil {
+		t.Fatal("source changed after commit but cleanup proceeded")
+	}
+	assertRetained(t, remote+".collected", "data")
+	if err := os.WriteFile(filepath.Join(remote+".collected", "data"), []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(filepath.Join(root, "registry.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reopened.moveJobDirectory(t.Context(), cluster, remote, final); err != nil {
+		t.Fatalf("%v: %v", err, asData(err))
+	}
+	receipt, err := readCollectionReceipt(final)
+	if err != nil || !receipt.Cleaned {
+		t.Fatalf("receipt = %+v, %v", receipt, err)
+	}
+	if _, err := os.Stat(remote + ".collected"); !os.IsNotExist(err) {
+		t.Fatalf("verified source remains: %v", err)
+	}
+}

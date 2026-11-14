@@ -271,7 +271,7 @@ serve 进程用 Go 实现。SDK 仍是 Python 和 TypeScript。不把业务逻�
 ### 11. Mutation与有限operation结果
 
 runtime在authorize→schema/Scheduler/revision 校验→render/stage→native submit 后返回 accepted JobRef；原生调度器拒绝不先存 FAILED 记录。
-submit/cancel发出后RPC断连/超时不能当没执行，返回OUTCOME_UNKNOWN；禁止换runtime自动重发。request_key/operation_id仅同instance有限内存去重（建议10分钟），新stdio实例/重启保证失效；跨重启exactly-once另立durable-controlspec。
+submit/cancel 发出后 RPC 断连或超时返回 `OUTCOME_UNKNOWN`。带 `request_key` 的提交在 registry 旁独占持久化请求摘要、目标、目录和提交时间，确认后保存回执。重放只返回回执或用原生证据对账，证据不足时继续返回未知。cancel 的 key 仍为单实例有界内存去重。Slurm `Scheduling.array` 支持 1–64 个显式索引和可选并发上限，返回 `array_id`、`refs`、`snapshots`；元素使用原生 `父ID_索引`。并行 Slurm Step 首版限单节点 CPU，按显式 task/CPU/内存预算隔离。
 files/transfer有限operation通过runtime执行，client上传内容而不是runtime去读clientlocalpath；临时runtime需保持到operation结束，不能宣称退出后可继续查询所有transfer状态。
 
 ## Modified Types / Module Changes

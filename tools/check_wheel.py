@@ -42,7 +42,10 @@ with tempfile.TemporaryDirectory() as temp:
         )
         if args == ["--version"]:
             envelope = json.loads(command.stdout)
-            assert envelope["jsonrpc"] == "2.0" and envelope["result"]["version"] == "0.9.0"
+            assert (
+                envelope["jsonrpc"] == "2.0"
+                and envelope["result"]["version"] == "0.9.0"
+            )
         else:
             assert "molq job" in command.stdout
             assert "jsonrpc" not in command.stdout

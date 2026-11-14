@@ -418,16 +418,16 @@ class AsyncCluster:
 
     async def submit(
         self, spec: JobSpec, *, request_key: str | None = None
-    ) -> AsyncJob:
-        """Submit one allocation described by a JobSpec.
+    ) -> AsyncJob | AsyncJobCollection:
+        """Submit one allocation or a native array.
 
         Args:
             spec (JobSpec): Immutable allocation specification.
-            request_key (str | None): Optional bounded deduplication key within
-                the current serve instance; it does not survive runtime restart.
+            request_key (str | None): Optional durable key. Repeating the same
+                request reconciles the prior submission without resending it.
 
         Returns:
-            AsyncJob: A handle for the accepted native allocation.
+            AsyncJob | AsyncJobCollection: One allocation or the accepted array elements.
 
         Raises:
             MolqError: The request is not a JobSpec, the runtime or
@@ -443,6 +443,8 @@ class AsyncCluster:
             spec=_job_spec(spec),
             request_key=request_key,
         )
+        if "refs" in result:
+            return AsyncJobCollection(self.molq, result["refs"])
         return AsyncJob(self.molq, result["ref"])
 
     async def transfer(

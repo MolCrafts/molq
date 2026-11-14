@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -153,14 +154,20 @@ func (r contextReader) Read(p []byte) (int, error) {
 	return r.Reader.Read(p)
 }
 
-func collectionRsync(ctx context.Context, binding map[string]any, remote, local string, verify bool) error {
+func collectionRsync(ctx context.Context, binding map[string]any, remote, local string, verify, subset bool) error {
 	source := location{transport: binding, path: remote + "/"}
 	destination := location{transport: map[string]any{"kind": "local"}, path: filepath.ToSlash(local) + "/"}
 	runner, rsh, operands, err := transferRoute([]location{source}, destination)
 	if err != nil {
 		return err
 	}
-	args := []string{"rsync", "-rlpt", "--checksum", "--delete"}
+	args := []string{"rsync", "-rl", "--checksum"}
+	if !subset {
+		args = append(args, "--delete")
+	}
+	if !verify {
+		args = append(args, "-pt")
+	}
 	if verify {
 		args = append(args, "--dry-run", "--itemize-changes")
 	} else {
@@ -171,26 +178,57 @@ func collectionRsync(ctx context.Context, binding map[string]any, remote, local 
 	if err != nil {
 		return err
 	}
-	if result.ReturnCode != 0 || len(result.Stderr) != 0 || (verify && strings.TrimSpace(result.Text()) != "") {
+	if result.ReturnCode != 0 || len(result.Stderr) != 0 || (verify && collectionDifferences(result.Text())) {
 		return protocol.Fail("FILE_UNAVAILABLE", "Job directory copy or verification failed", map[string]any{
 			"path": remote, "returncode": result.ReturnCode,
-			"stderr": strings.ToValidUTF8(string(result.Stderr), "�"),
+			"stderr": strings.ToValidUTF8(string(result.Stderr), "�"), "differences": result.Text(),
 		})
 	}
 	return nil
 }
 
-func (s *Service) moveJobDirectory(ctx context.Context, cluster map[string]any, remote, final string) error {
-	release, err := s.acquire(ctx, stringField(cluster["id"]))
-	if err != nil {
-		return err
+// A dry run may report metadata-only changes for rsync implementations
+// that preserve destination timestamps differently. Compare bytes and names.
+func collectionDifferences(output string) bool {
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || len(fields[0]) < 9 {
+			return true
+		}
+		item := fields[0]
+		if item[0] != '.' || item[2] != '.' || item[3] != '.' {
+			return true
+		}
 	}
-	defer release()
+	return false
+}
+
+func (s *Service) moveJobDirectory(ctx context.Context, cluster map[string]any, remote, final string) error {
 	binding := clusterTransport(cluster)
 	if err := os.MkdirAll(filepath.Dir(final), 0o700); err != nil {
 		return err
 	}
+	// Persist the archive's ancestry before deleting anything on the target.
+	for directory := filepath.Dir(filepath.Dir(final)); ; directory = filepath.Dir(directory) {
+		if err := syncDirectory(directory); err != nil {
+			return err
+		}
+		if directory == filepath.Dir(s.Registry.Path) || directory == filepath.Dir(directory) {
+			break
+		}
+	}
 	if !isDirectory(final) {
+		target := transport.Create(binding)
+		check, err := target.Run(ctx, []string{"sh", "-c", `[ -d "$1" ] && [ ! -L "$1" ] && [ ! -L "${1%/*}" ]`, "sh", remote}, 30*time.Second, nil, false)
+		if err != nil {
+			return err
+		}
+		if check.ReturnCode != 0 {
+			return protocol.Fail("FILE_UNAVAILABLE", "Job collection source is missing or is a symlink", nil)
+		}
 		if _, err := os.Lstat(filepath.Join(filepath.Dir(final), "."+filepath.Base(final)+".partial")); !os.IsNotExist(err) {
 			return protocol.Fail("FILE_UNAVAILABLE", "Legacy partial job directory requires manual recovery", nil)
 		}
@@ -198,10 +236,10 @@ func (s *Service) moveJobDirectory(ctx context.Context, cluster map[string]any, 
 		if err := os.MkdirAll(stage, 0o700); err != nil {
 			return err
 		}
-		if err := collectionRsync(ctx, binding, remote, stage, false); err != nil {
+		if err := collectionRsync(ctx, binding, remote, stage, false, false); err != nil {
 			return err
 		}
-		if err := collectionRsync(ctx, binding, remote, stage, true); err != nil {
+		if err := collectionRsync(ctx, binding, remote, stage, true, false); err != nil {
 			return err
 		}
 		entries, err := collectionManifest(ctx, stage, true)
@@ -236,6 +274,10 @@ func (s *Service) moveJobDirectory(ctx context.Context, cluster map[string]any, 
 	if err := finishCollection(ctx, binding, remote, final); err != nil {
 		return err
 	}
+	if arrayDirectory(path.Base(remote)) {
+		target := transport.Create(binding)
+		_, _ = target.Run(ctx, []string{"rmdir", "--", path.Dir(remote)}, 30*time.Second, nil, false)
+	}
 	receipt.Cleaned = true
 	return writeReceipt(receiptPath(final), receipt, false)
 }
@@ -248,7 +290,8 @@ func finishCollection(ctx context.Context, binding map[string]any, remote, final
 	run := func(script string) (transport.Result, error) {
 		return target.Run(ctx, []string{"sh", "-c", script, "sh", remote, quarantine}, 30*time.Second, nil, false)
 	}
-	check, err := run(`for p in "$1" "$2"; do [ ! -L "$p" ] || exit 3; done
+	check, err := run(`[ ! -L "${1%/*}" ] || exit 3
+for p in "$1" "$2"; do [ ! -L "$p" ] || exit 3; done
 if [ -d "$2" ]; then [ ! -e "$1" ] || exit 3; printf quarantine
 elif [ -d "$1" ]; then printf source
 elif [ ! -e "$1" ] && [ ! -e "$2" ]; then printf absent
@@ -263,7 +306,7 @@ else exit 3; fi`)
 		return nil
 	}
 	if check.Text() == "source" {
-		if err := collectionRsync(ctx, binding, remote, final, true); err != nil {
+		if err := collectionRsync(ctx, binding, remote, final, true, false); err != nil {
 			return err
 		}
 		moved, err := run(`[ -d "$1" ] && [ ! -L "$1" ] && [ ! -e "$2" ] && [ ! -L "$2" ] && mv -- "$1" "$2"`)
@@ -276,7 +319,7 @@ else exit 3; fi`)
 	} else if check.Text() != "quarantine" {
 		return protocol.Fail("FILE_UNAVAILABLE", "Unexpected collection source status", nil)
 	}
-	if err := collectionRsync(ctx, binding, quarantine, final, true); err != nil {
+	if err := collectionRsync(ctx, binding, quarantine, final, true, true); err != nil {
 		return err
 	}
 	deleted, err := run(`[ ! -e "$1" ] && [ ! -L "$1" ] && [ -d "$2" ] && [ ! -L "$2" ] && rm -rf -- "$2"`)

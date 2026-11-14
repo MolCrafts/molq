@@ -1,5 +1,5 @@
 /** Compile-time assertions for the callable destination API. */
-import {submit, JobSpec, type Job, type JobSpec as RequestSpec} from "@molcrafts/molq";
+import {submit, JobSpec, Job, type JobCollection, type JobSpec as RequestSpec} from "@molcrafts/molq";
 
 async function types() {
   const local = await submit("dev", "local", {registry: "registry.db"});
@@ -8,8 +8,13 @@ async function types() {
     const job = yield spec;
     return job;
   });
-  const job: Job = await hello("molq");
-  await job.wait(30);
+  const job: Job | JobCollection = await hello("molq");
+  if (job instanceof Job) await job.wait(30);
+  const array: JobCollection = await local.submit({
+    ...JobSpec.argv(["true"]),
+    scheduling: { array: { indices: [0, 1], max_concurrent: 1 } },
+  });
+  await array.status();
   // @ts-expect-error Decorated calls retain the builder's parameter types.
   await hello(123);
   const double = local((value: number) => value * 2);

@@ -14,6 +14,7 @@ type Scheduler interface {
 	Validate(spec map[string]any) error
 	Render(spec map[string]any, directory string) (string, error)
 	Submit(ctx context.Context, spec map[string]any, directory string) (Job, error)
+	RecoverSubmission(ctx context.Context, lookup SubmissionLookup) (Job, error)
 	QueryMany(ctx context.Context, ids []string) (map[string]Job, error)
 	List(ctx context.Context) ([]Job, error)
 	History(ctx context.Context, ids []string) (map[string]Job, error)
