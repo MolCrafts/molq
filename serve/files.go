@@ -19,7 +19,9 @@ const fileOpTimeout = 30 * time.Second
 // spliced into shell text. Precondition failures exit with the errno value
 // the caller maps back to a reason before anything is changed.
 const (
-	statScript = `p=$1; l=0; [ -L "$p" ] && l=1
+	// uutils date (Ubuntu 25.10+) reads `-r -name` as an option, so a leading
+	// dash is anchored to the current directory.
+	statScript = `p=$1; case "$p" in -*) p=./$p;; esac; l=0; [ -L "$p" ] && l=1
 if [ ! -e "$p" ]; then printf 'missing %s\n' "$l"; exit 0; fi
 if [ -d "$p" ]; then k=directory; elif [ -f "$p" ]; then k=file; else k=other; fi
 m=$(date -r "$p" +%s) || exit 1
