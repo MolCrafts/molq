@@ -1,6 +1,6 @@
 [project]
 site_name = "molq"
-site_description = "One Python interface for local commands and HPC schedulers."
+site_description = "Run local commands and HPC jobs from Python or the command line."
 site_url = "https://docs.molcrafts.org/molq/"
 site_author = "Roy Kid"
 copyright = "Copyright &copy; 2026 MolCrafts"
@@ -9,29 +9,38 @@ site_dir = "site"
 repo_url = "https://github.com/MolCrafts/molq"
 repo_name = "MolCrafts/molq"
 edit_uri = "edit/master/docs/"
+exclude_docs = """
+reviews/
+spec/
+"""
 
 nav = [
   { "Home" = "index.md" },
-  { "Start here" = [
+  { "Getting started" = [
+    { "Installation" = "installation.md" },
     { "Quickstart" = "getting-started.md" },
-    { "Mental model" = "concepts.md" },
+    { "Jobs and clusters" = "concepts.md" },
+    { "0.9.0 release notes" = "release-notes.md" },
   ] },
-  { "Guides" = [
+  { "User guide" = [
+    { "Clusters" = "schedulers.md" },
     { "Submit jobs" = "jobs.md" },
-    { "Clusters & schedulers" = "schedulers.md" },
-    { "Monitor jobs" = "monitoring.md" },
-    { "Remote files" = "remote-files.md" },
-    { "Command line" = "cli.md" },
-    { "Plugins & Nerve" = "plugins.md" },
-  ] },
-  { "Reference" = [
+    { "Follow jobs" = "monitoring.md" },
+    { "Files and logs" = "remote-files.md" },
+    { "GPUs and NVIDIA MPS" = "nvidia-mps.md" },
+    { "Watch and notifications" = "plugins.md" },
     { "Configuration" = "configuration.md" },
+  ] },
+  { "API reference" = [
     { "Python API" = [
       { "Overview" = "api.md" },
-      { "Core API" = "reference/core.md" },
-      { "Job types" = "reference/types.md" },
-      { "Supporting APIs" = "reference/utilities.md" },
+      { "Client handles" = "reference/core.md" },
+      { "Async handles" = "reference/async.md" },
+      { "Request values" = "reference/types.md" },
     ] },
+    { "TypeScript" = "reference/typescript.md" },
+    { "Command line" = "cli.md" },
+    { "RPC and errors" = "reference/utilities.md" },
   ] },
 ]
 
@@ -56,6 +65,24 @@ link = "https://github.com/MolCrafts/molq"
 icon = "fontawesome/brands/python"
 link = "https://pypi.org/project/molcrafts-molq/"
 
+[project.markdown_extensions]
+abbr = {}
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+
+[project.markdown_extensions.toc]
+permalink = true
+
+[project.markdown_extensions.pymdownx]
+details = {}
+inlinehilite = {}
+highlight = { anchor_linenums = true, line_spans = "__span", pygments_lang_class = true }
+tabbed = { alternate_style = true, combine_header_slug = true }
+superfences = {}
+
 [project.plugins.search]
 
 [project.plugins.mkdocstrings]
@@ -70,7 +97,7 @@ show_source = false
 show_root_heading = true
 show_root_full_path = false
 separate_signature = true
-heading_level = 2
+heading_level = 3
 merge_init_into_class = true
 members_order = "source"
 filters = ["!^_"]

@@ -1,158 +1,108 @@
 # Quickstart
 
-This page takes you from installation to a completed local job. You do not
-need an HPC account, a configuration file, or a running daemon.
+Run a local command, wait for it, and save its reference so you can return later.
+Install molq with `pip install molcrafts-molq`.
 
-## Install
+## Python
 
-molq requires Python 3.12 or newer.
-
-=== "pip"
-
-    ```bash
-    pip install molcrafts-molq
-    ```
-
-=== "uv"
-
-    ```bash
-    uv add molcrafts-molq
-    ```
-
-The distribution is named `molcrafts-molq`; the Python package and command are
-both named `molq`.
-
-```bash
-molq --help
-```
-
-## Run a local job
-
-Create a destination, attach a queue to it, and submit an argument vector:
+Register a local destination, then use it as a decorator:
 
 ```python
-import molq as mq
+import json
+from pathlib import Path
 
-cluster = mq.Cluster("laptop", "local")
+from molq import JobSpec, submit
 
-with mq.Submitor(target=cluster) as queue:
-    job = queue.submit_job(
-        argv=["python", "-c", "print('hello from molq')"]
-    )
-    result = job.wait()
+local = submit("local", "local", project_root=Path.cwd())
 
-print(result.state.value)
-print(result.exit_code)
+
+@local
+def hello(name):
+    job = yield JobSpec.argv(["echo", f"hello {name}"])
+    return job
+
+
+job = hello("molq")
+result = job.wait(timeout=30)
+print(json.dumps(job.logs(), ensure_ascii=False))
+local.close()
 ```
 
-Expected output:
+Output:
 
-```text
-succeeded
-0
+```json
+{"text": "hello molq\n", "next_offset": 11, "bytes_read": 11}
 ```
 
-`"laptop"` is a namespace for persisted records. `"local"` selects the
-no-batch scheduler. The context manager closes the SQLite connection when the
-work is finished; it does not cancel the job.
+The decorated function runs on your submission machine. Each `yield JobSpec` submits an
+allocation to the destination and receives its `Job`; `return` sets the function's
+result. Calling `hello()` again submits another allocation.
 
-## Inspect what was submitted
+Later scripts use `local = submit("local", project_root=Path.cwd())` with the same `@local` decorator.
+`local.close()` releases the connection and leaves jobs running.
 
-`submit_job()` returns a `JobHandle` immediately:
+Save a job's reference before closing if you want to return later:
 
 ```python
-with mq.Submitor(target=cluster) as queue:
-    job = queue.submit_job(argv=["sleep", "2"])
+import json
+from pathlib import Path
 
-    print(job.job_id)            # molq's stable ID
-    print(job.scheduler_job_id)  # backend-specific ID
-    print(job.status())          # cached state
-
-    job.refresh()                # one scheduler reconciliation pass
-    record = job.wait(timeout=30)
+Path("ref.json").write_text(json.dumps(job.ref))
 ```
 
-The final `JobRecord` contains the state, timestamps, exit code, command,
-working directory, and artifact paths.
+## Command line
 
-You can inspect the same record from the CLI. Reuse the cluster namespace:
+Save this as `local.json`. Pass an existing execution-machine project directory on submission.
 
-```bash
-molq list local --cluster laptop --all
-molq status JOB_ID local --cluster laptop
-molq inspect JOB_ID local --cluster laptop
+```json
+{
+  "name": "local",
+  "scheduler": "shell",
+  "transport": {"kind": "local"}
+}
 ```
 
-!!! tip "Keep the namespace stable"
+Register it and submit a command:
 
-    Job commands filter records by cluster name. If submission used
-    `"laptop"`, inspection must also use `--cluster laptop`.
+```sh
+molq cluster register --definition @local.json
+molq job submit local --project-root "$PWD" -- echo "hello molq" > submit.json
+```
 
-## Run your own program
+Extract the reference from the JSON response:
 
-`argv` is the safest command form because arguments are not interpreted by a
-shell:
+```sh
+python - <<'PY'
+import json
+from pathlib import Path
+response = json.loads(Path("submit.json").read_text())
+Path("ref.json").write_text(json.dumps(response["result"]["ref"]))
+PY
+molq job wait --ref @ref.json --timeout 30
+molq job logs --ref @ref.json
+```
+
+A redirected command returns JSON. On a terminal, `cluster list` and `job list`
+print a table; `--json` keeps the JSON object. `--ref` accepts the reference
+itself, rather than the complete submission response. See [CLI reference](cli.md)
+for exit codes.
+
+## Return to a job
+
+Keep the registry and reference. Closing a client leaves accepted jobs running.
 
 ```python
-with mq.Submitor(target=cluster) as queue:
-    job = queue.submit_job(
-        argv=["python", "analysis.py", "--input", "sample.xyz"]
-    )
-    record = job.wait()
+import json
+from pathlib import Path
+
+from molq import Molq
+
+mq = Molq()
+job = mq.job(json.loads(Path("ref.json").read_text()))
+result = job.status()
+print(json.dumps(result["snapshots"][0]["state"], ensure_ascii=False))
+mq.close()
 ```
 
-Use `command=` only when you intentionally need shell syntax such as pipes or
-redirection. Use `script=` for multi-line shell logic. See
-[Submit jobs](jobs.md#choose-a-command-form).
-
-## Move the same workflow to SLURM
-
-Use an SSH host alias that already works with `ssh`:
-
-```sshconfig
-Host dardel
-    HostName dardel.pdc.kth.se
-    User alice
-```
-
-Then change the destination and add scheduler resources:
-
-```python
-import molq as mq
-
-cluster = mq.Cluster("dardel", "slurm", host="dardel")
-
-with mq.Submitor(target=cluster) as queue:
-    job = queue.submit_job(
-        argv=["python", "train.py"],
-        resources=mq.JobResources(
-            cpu_count=8,
-            memory=mq.Memory.gb(32),
-            time_limit=mq.Duration.hours(4),
-        ),
-        scheduling=mq.JobScheduling(
-            partition="gpu",
-            account="project123",
-        ),
-    )
-    print(job.job_id)
-```
-
-molq invokes the system `ssh`, `rsync`, and scheduler clients. Your existing
-OpenSSH configuration remains the source of truth for authentication,
-ProxyJump, agents, and connection sharing.
-
-!!! warning "Code and inputs must exist remotely"
-
-    `argv=["python", "train.py"]` does not upload `train.py`. Stage files first
-    with a [Workspace or Project](remote-files.md), or submit from a working
-    directory that already exists on the cluster.
-
-## Where to go next
-
-- [Mental model](concepts.md) explains the small set of objects you just used.
-- [Submit jobs](jobs.md) covers resources, execution settings, retries, and
-  dependencies.
-- [Clusters and schedulers](schedulers.md) covers local, SSH, SLURM, PBS, and
-  LSF destinations.
-- [Monitor jobs](monitoring.md) covers status, logs, history, and daemon mode.
+Use the registry that accepted the job. Next, [register an HPC destination](schedulers.md)
+or [describe an allocation](jobs.md).

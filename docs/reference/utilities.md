@@ -1,76 +1,66 @@
-# Supporting APIs
+# RPC and errors
 
-Remote directories, configuration, SSH discovery, lifecycle callbacks, and the
-exception hierarchy.
+All clients use JSON-RPC 2.0 with named parameters. The service exposes HTTP RPC
+at `/rpc`, WebSocket subscriptions at the same path, and newline-delimited stdio.
+Before 1.0, there is no independent protocol version or backward compatibility. Frames are limited to 1 MiB and batches to 128 requests.
+Mutations require a request ID.
 
-::: molq.workspace.Workspace
+```sh
+molq discover
+molq rpc jobs.list --params '{"cluster":"hpc"}'
+```
 
-::: molq.workspace.Project
+`discover` returns the method catalog and schemas. The canonical schema is
+[contract.json](https://github.com/MolCrafts/molq/blob/master/src/molq/protocol/contract.json).
+The hello handshake reports protocol and registry identity; it does not negotiate
+scheduler resources.
 
-::: molq.config.MolqProfile
+## Methods
 
-::: molq.config.MolqConfig
+| Area | Methods |
+|---|---|
+| Connection | `molq.hello`, `schema.discover` |
+| Clusters | `clusters.list`, `get`, `register`, `update`, `remove` |
+| Submission | `jobs.validate`, `preview`, `submit` |
+| State | `jobs.get`, `get_many`, `list`, `history`, `observe` |
+| Native job control | `jobs.cancel`, `cancel_many`, `requeue` |
+| Legacy maintenance | `maintenance.inspect`, `maintenance.prune`, `maintenance.prune_submissions` |
+| Events | `events.subscribe` |
+| Files | `logs.read`, `files.transfer`, `stat`, `list`, `read`, `write`, `mkdir`, `remove`, `rename`, `touch` |
+| Settings | `config.get`, `set`, `reload` |
+| Presets | `presets.list`, `get`, `set` |
 
-::: molq.config.load_config
+Names in a row share the first method's prefix. Subscriptions passively deliver
+already observed events; they do not sample the scheduler.
 
-::: molq.config.load_profile
+## Errors
 
-::: molq.ssh_config.SshHost
+Error data contains `kind`, `message`, `outcome`, and `context`. Python exposes
+these through `MolqError`:
 
-::: molq.ssh_config.list_ssh_hosts
+```python
+import json
 
-::: molq.ssh_config.ssh_alias_names
+from molq import MolqError, submit
 
-::: molq.ssh_config.resolve_ssh_host
+hpc = submit("hpc")
+try:
+    job = hpc.submit(spec, project_root="/shared/project")
+except MolqError as error:
+    print(json.dumps(error.to_wire(), ensure_ascii=False))
+finally:
+    hpc.close()
+```
 
-::: molq.options.SshTransportOptions
+| Outcome | Meaning |
+|---|---|
+| `not_applied` | The mutation was not applied |
+| `applied` | The operation took effect |
+| `unknown` | It may have taken effect; reconcile before resending |
 
-::: molq.callbacks.EventType
+A disconnected or timed-out mutation can return `OUTCOME_UNKNOWN`. Check native
+scheduler state or the affected configuration before another mutation. Clients
+do not automatically resend. A `request_key` is retained for up to 10 minutes
+and 1024 operations in one service; it is not recovery across a restart.
 
-::: molq.callbacks.EventPayload
-
-::: molq.callbacks.EventBus
-
-::: molq.plugin.MolqPlugin
-
-::: molq.plugin.PluginContext
-
-::: molq.plugin.PluginManager
-
-::: molq.plugin.available_plugins
-
-`BUILTIN_PLUGIN_FACTORIES` maps each official plugin name to the factory
-that builds it. Official names win over third-party entry points of the
-same name.
-
-::: molq.plugin.create_plugin
-
-::: molq.config.enabled_plugin_names
-
-::: molq.store.dependency_relation_state
-
-::: molq.errors
-    options:
-      members:
-        - MolqError
-        - ConfigError
-        - SubmitError
-        - CommandError
-        - ScriptError
-        - SchedulerError
-        - JobNotFoundError
-        - MolqTimeoutError
-        - StoreError
-
-## Dashboard
-
-The full-screen monitor behind `molq monitor`. These names are exported
-lazily — importing `molq` does not pull in the terminal UI.
-
-::: molq.dashboard.MolqMonitor
-
-::: molq.dashboard.RunDashboard
-
-::: molq.dashboard.DashboardState
-
-::: molq.dashboard.JobRow
+::: molq.errors.MolqError

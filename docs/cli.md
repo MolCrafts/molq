@@ -1,239 +1,138 @@
 # Command line
 
-The `molq` CLI submits jobs, reads the same SQLite records as the Python API,
-and offers terminal-oriented inspection and monitoring.
+A cluster is a registered destination. A job is one allocation on that cluster.
+The SSH host in `~/.ssh/config` is only how the cluster is reached.
 
-```bash
-molq --help
-molq submit --help
+```sh
+molq cluster list
+molq job list hpc
 ```
 
-## The two identifiers you must keep consistent
+On a terminal, those two lists print a table. A pipe, a redirect, or `--json`
+prints one JSON object with either `result` or `error`. `--help` is text.
+`--version` is JSON. Other commands print JSON. Watch streams one JSON response
+per line. Diagnostics go to stderr. Exit codes are below.
 
-Most commands accept both:
+## Connections
 
-- a **scheduler** positional argument: `local`, `slurm`, `pbs`, or `lsf`;
-- `--cluster`, the namespace used to store and retrieve records.
+Without an endpoint, commands use a temporary stdio service. Select an HTTP
+service with `--endpoint` and `--token`, or the configuration's `client` section.
 
-```bash
-molq submit local --cluster laptop echo hello
-molq list local --cluster laptop --all
+```sh
+molq --config ./config.json cluster list
+molq --registry ./registry.db cluster list
 ```
 
-If `--cluster` names a `Host` entry declared in `~/.ssh/config`, molq uses it
-as an SSH destination when no profile is active. Any other name — including
-the default `cli_<scheduler>` namespace — is a local destination and a pure
-record namespace.
+The same connection applies to diagnostics, generic RPC, and `watch`.
 
-!!! note "Why the alias must be declared"
+## Jobs
 
-    molq checks the `Host` blocks in your SSH config rather than asking
-    `ssh -G`, because `ssh -G` prints a resolved configuration for *any*
-    string you hand it and so can never distinguish a real destination from a
-    typo.
-
-!!! warning "Use the same namespace later"
-
-    A job submitted with `--cluster dardel` will not appear under the default
-    `cli_slurm` namespace.
-
-## Submit
-
-```bash
-molq submit SCHEDULER [OPTIONS] COMMAND...
+```sh
+molq job submit local --project-root "$PWD" -- echo hello
+molq job submit hpc --project-root /shared/project --spec @job.json
+molq transfer -a --exclude build/ ./inputs/ hpc:/shared/project/inputs/
+molq job status --ref @ref.json
+molq job wait --ref @ref.json --timeout 600 --interval 2
+molq job logs --ref @ref.json --stream stderr --offset 0 --limit 65536
+molq job cancel --ref @ref.json
 ```
 
-Local:
+`transfer` is rsync syntax: options, then `SRC... DEST`. `CLUSTER:PATH` names a
+registered cluster the way rsync's `HOST:PATH` names a host; a plain path is
+local. See [Files and logs](remote-files.md#transfer-files).
 
-```bash
-molq submit local --cluster laptop python analyse.py
+Use either `--spec` or argv after `--`. In argv mode, use `--name`, `--comment`,
+`--partition`, and `--account` for scheduling. Use `--nodes`, `--tasks`,
+`--cpus-per-task`, `--memory-bytes` (decimal bytes per node), and
+`--time-limit-seconds` for resources. With a spec, include these in the
+`scheduling` and `resources` objects. `--spec @-` reads JSON from stdin.
+Slurm and LSF support comments. Each scheduler validates the representation.
+
+`job preview` takes the same project and specification or argv and returns
+the rendered script without submitting. In the commands below, set
+`CLUSTER`, `PROJECT`, `PARTITION`, `ACCOUNT`, and `SIF` explicitly. `PROJECT`
+and `SIF` are absolute paths on Arrhenius, visible from the compute node.
+
+```sh
+molq job preview "$CLUSTER" --project-root "$PROJECT" \
+  --partition "$PARTITION" --account "$ACCOUNT" \
+  --tasks 1 --cpus-per-task 1 --time-limit-seconds 120 -- \
+  apptainer exec --bind "$PROJECT:/work" --pwd /work -- "$SIF" /bin/sh inputs/run.sh
 ```
 
-SLURM:
+Use the same arguments with `job submit` when ready. Pass a
+`--request-key KEY` to reconcile that exact submission if the response is lost.
+See the [Arrhenius quick start](https://user.naiss.se/arrhenius_hpc/quickstart/)
+for site-specific scheduling and container requirements.
 
-```bash
-molq submit slurm \
-  --cluster dardel \
-  --cpus 8 \
-  --mem 32G \
-  --time 4h \
-  --gpus 1 \
-  --partition gpu \
-  --account project123 \
-  python train.py
+`--ref` accepts a saved JobRef, not the complete submit response. The
+[quickstart](getting-started.md#command-line) shows how to extract it.
+Wait timeouts and intervals are in seconds.
+
+## Queue and history
+
+```sh
+molq job list hpc --state running --name simulation
+molq job history hpc --state failed --limit 100
+molq job history hpc --refs @refs.json
+molq job observe hpc
+molq watch --cluster hpc --interval 5
+molq job requeue --ref @ref.json
 ```
 
-Wait before returning:
+`--state` is repeatable. Slurm range history accepts `--since` and `--until` as
+RFC3339 timestamps and filters completion time in `[since, until)`; the default
+window is 24 hours. `--refs` takes a JSON array and excludes range filters.
+See [monitoring](monitoring.md) for coverage and cursor semantics.
+For Shell, pass `--project-root PATH` to `job list`, `job observe`, and
+`watch`. See [legacy maintenance](configuration.md#layout-upgrade-and-legacy-maintenance)
+to inspect old archives.
 
-```bash
-molq submit local --cluster laptop --block python analyse.py
+## Destinations and diagnostics
+
+```sh
+molq cluster register --definition @hpc.json
+molq cluster get hpc
+molq cluster update hpc --definition @hpc.json --revision 1
+molq ping
+molq health
+molq doctor
+molq discover
+molq rpc config.reload
 ```
 
-Retry at most twice after the first attempt:
+`ping`, `health`, and `doctor` do not submit work. `rpc METHOD --params` accepts
+inline JSON, `@file`, or `@-` for stdin.
 
-```bash
-molq submit slurm \
-  --cluster dardel \
-  --retries 3 \
-  --retry-on-exit-code 137 \
-  python train.py
-```
+## Output contract
 
-Dependencies accept molq job IDs:
+`molq --version` returns the product version in `result.version`.
+`molq --help` and `molq COMMAND --help` print text. Arguments after `--` belong
+to your executable, including `--help`.
 
-```bash
-molq submit slurm \
-  --cluster dardel \
-  --after-success PARENT_JOB_ID \
-  python evaluate.py
-```
+`molq cluster list` and `molq job list` print a table when stdout is a terminal.
+Pass `--json`, or redirect stdout, to receive the JSON object instead. Agents
+use that object. They do not parse the table.
 
-Repeat `--after-success`, `--after-failure`, `--after-started`, or `--after`
-to supply several upstream jobs.
+SDK methods return values and produce no console output. Python examples use
+`json.dumps(...)`; TypeScript examples use `JSON.stringify(...)`. Logs remain
+inside a JSON `text` field with offsets for bounded reads.
 
-## Inspect and control
+## Exit codes
 
-| Command | Purpose |
+| Exit | Meaning |
 |---|---|
-| `list` | Active records; add `--all` for terminal jobs |
-| `status` | Refresh and print one job |
-| `inspect` | Metadata, attempts, dependencies, and transition timeline |
-| `watch` | Wait for one job; add `--all` for every active job |
-| `cancel` | Cancel the latest active attempt |
-| `logs` | Read local stdout or stderr |
-| `history` | Show persisted history |
-| `cleanup` | Apply retention policy |
+| 0 | Successful operation |
+| 1 | Unexpected internal failure |
+| 2 | Invalid input or unknown method |
+| 3 | Missing destination, file, or cache |
+| 4 | Service, scheduler, or transport unavailable |
+| 5 | Unsupported representation, protocol, or channel |
+| 6 | Wait or operation deadline |
+| 7 | Authentication, permission, or native rejection |
+| 8 | Partial batch failure |
+| 9 | Confirmed terminal execution failure |
+| 10 | Conflict, uncertain mutation, or identity mismatch |
 
-Examples:
-
-```bash
-molq list slurm --cluster dardel --all
-molq status JOB_ID slurm --cluster dardel
-molq inspect JOB_ID slurm --cluster dardel
-molq watch JOB_ID slurm --cluster dardel --timeout 3600
-molq cancel JOB_ID slurm --cluster dardel
-```
-
-## Read logs
-
-For local jobs:
-
-```bash
-molq logs JOB_ID local --cluster laptop
-molq logs JOB_ID local --cluster laptop --stream stderr --tail 100
-molq logs JOB_ID local --cluster laptop --follow
-```
-
-The current CLI reads recorded paths from the local filesystem. For an SSH
-destination, use `Submitor.fetch_logs()` to transfer them first:
-
-```python
-paths = queue.fetch_logs("JOB_ID", dest_dir="./logs")
-```
-
-## Watch and monitor
-
-Wait for every active local job in a namespace:
-
-```bash
-molq watch --all --cluster laptop
-```
-
-Open the cross-namespace dashboard:
-
-```bash
-molq monitor
-molq monitor --all --limit 500 --refresh 1.5
-```
-
-Run background reconciliation:
-
-```bash
-molq daemon slurm --cluster dardel
-molq daemon slurm --cluster dardel --once
-```
-
-When the config has no `[plugins]` table, `daemon` enables the official Nerve
-status plugin. See [Plugins and Nerve](plugins.md).
-
-## Discover destinations
-
-List profile destinations and concrete SSH aliases:
-
-```bash
-molq clusters list
-molq clusters show dardel
-```
-
-SSH aliases are resolved with `ssh -G`, so the display reflects effective
-OpenSSH settings.
-
-## Sync remote files
-
-```bash
-molq workspace sync ./src \
-  --cluster dardel \
-  --path /remote/project/src
-
-molq workspace sync ./results \
-  --pull \
-  --cluster dardel \
-  --path /remote/project/results
-
-molq workspace list \
-  --cluster dardel \
-  --path /remote/project
-```
-
-See [Remote files](remote-files.md) for the corresponding Python API.
-
-## Use a profile
-
-```bash
-molq submit slurm \
-  --profile gpu \
-  --config ./config.yaml \
-  python train.py
-```
-
-Profiles provide scheduler options, defaults, retry, retention, and job
-directory settings. The top-level `plugins` mapping applies to CLI sessions
-separately.
-The default config file is:
-
-```text
-~/.molcrafts/molq/config/config.yaml
-```
-
-Profiles currently do not encode SSH transport settings. For remote CLI
-submission without a profile, use an SSH alias with `--cluster`. In Python,
-combine a profile with an explicit remote target:
-
-```python
-cluster = mq.Cluster("dardel", "slurm", host="dardel")
-queue = mq.Submitor.from_profile("gpu", target=cluster)
-```
-
-See [Configuration](configuration.md) for the complete config shape and
-precedence rules.
-
-## List plugins
-
-```bash
-molq plugins list
-```
-
-The command shows official and third-party plugins and whether the current
-config enables them.
-
-## Command map
-
-```text
-Jobs        submit  list  status  inspect  watch  cancel  logs
-History     history  cleanup
-Live        monitor  daemon
-Setup       clusters list|show  workspace sync|list  plugins list
-```
-
-Use `molq COMMAND --help` as the authoritative option list for the installed
-version.
+Cancellation acceptance does not confirm task completion. Check the JSON outcome
+and later status. An unknown mutation outcome needs reconciliation before resend.

@@ -1,68 +1,11 @@
 # Contributing
 
-## Setup
+Read AGENTS.md and docs/spec/molq-1-0-runtime-spec.md before changing architecture. There is one Runtime implementation and one public RPC contract; clients are peers. Do not restore old JobStore, Submitor, capability negotiation or direct client Scheduler access.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-```
+Install with uv sync --extra dev. Use Ruff formatting/lint and ty type checks. Run pytest with coverage (80% floor, including Runtime subprocesses). Build and smoke-test the installed wheel outside the source checkout.
 
-If you want to work on the documentation site:
+Schema changes start in tools/build_contract.py. Python façade changes start in client/objects.py. Regenerate via tools/generate_clients.py, build/test sdk/typescript and run tools/check_generated.py. All affected client projections and documentation must agree.
 
-```bash
-pip install -e ".[docs]"
-```
+Native Scheduler tests use bounded transport fixtures for exact directives/state/accounting/error behavior. Real POSIX Shell integration verifies accepted jobs survive session exit, execution plan semantics and identity-checked cancellation. Windows CI covers the remote control plane. Fixtures cannot establish live HPC resource/configuration support.
 
-## Local Checks
-
-Run the standard checks before opening a pull request:
-
-```bash
-ruff check src tests
-ruff format --check src tests
-ty check src/
-pytest -q
-```
-
-If docs dependencies are installed, you can preview the site locally:
-
-```bash
-zensical serve
-```
-
-## CI
-
-One workflow per kind of work; shared setup comes from
-`MolCrafts/molcrafts-ci/actions/<name>@master`. Each workflow's first job,
-`<file> / context`, runs `MolCrafts/molcrafts-ci/actions/ci-context`, and every
-other job gates on its outputs; `test / context` picks the tier:
-the *fast* tier runs on a feature-branch push to MolCrafts; the *full* tier on
-every push to a fork (so a branch is proven before its pull request), on
-`dev`/`master`/`main` on MolCrafts, on pull requests, tags and dispatches. A
-pull request inside a fork is skipped (its push already ran the full tier).
-
-| workflow | fast tier (feature branch on MolCrafts) | full tier (fork pushes, dev/master/main, PRs, tags) | MolCrafts only |
-|---|---|---|---|
-| `lint.yml` | `lint / hooks` (pre-commit stage, all files) | same | — |
-| `test.yml` | `test / context`, `test / python (ubuntu-latest, 3.12)`, `test / package` | `test / context`, `test / python ({ubuntu,macos}-latest, {3.12,3.13})`, `test / package` | — |
-| `docs.yml` | `docs / build` (`zensical build --strict`) | same | deploy: Cloudflare Pages, outside Actions |
-| `release.yml` | — | — | `v*` tag: lint + test + `release / build` + `release / pypi`; `workflow_dispatch` = dry run (no upload) |
-
-The `protect-master` ruleset on `master` requires a pull request, blocks force
-pushes and deletion, and requires `test / context` and the full-tier `lint /`, `test /` and `docs /` checks.
-
-
-## Change Expectations
-
-- Keep public API changes intentional and documented.
-- Add or update tests for behavior changes and bug fixes.
-- Update `README.md` and `docs/` when public behavior changes.
-  Release history lives in git tags / GitHub Releases (no `CHANGELOG.md`).
-- Keep scheduler-specific changes explicit about which backend they affect.
-
-## Pull Requests
-
-- Keep each PR scoped to one logical change.
-- Describe user-visible impact clearly.
-- Include migration notes if existing user code needs to change.
+Use typed structured errors, explicit uncertain mutation outcomes, finite deadlines and bounded memory. No permanent coroutine/session/timer per Job. No SQLite transactions surrounding SSH or native scheduler operations.

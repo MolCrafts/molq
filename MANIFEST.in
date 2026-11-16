@@ -3,7 +3,28 @@ include CHANGELOG.md
 include CONTRIBUTING.md
 include RELEASING.md
 include LICENSE
+include go.mod go.sum
+include protocol/contract.json
+recursive-include architecture *.go
+recursive-include client *.go
+recursive-include cmd *.go
+recursive-include config *.go
+recursive-include protocol *.go
+recursive-include registry *.go
+recursive-include rpc *.go
+recursive-include scheduler *.go
+recursive-include serve *.go
+recursive-include transport *.go
+recursive-include watch *.go
 include zensical.toml
 recursive-include docs *.md
 recursive-include src/molq py.typed
 recursive-include tests *.py
+
+recursive-include tools *.py
+recursive-include examples *.py
+include AGENTS.md
+include sdk/typescript/README.md
+include sdk/typescript/package.json sdk/typescript/package-lock.json sdk/typescript/tsconfig.json
+recursive-include sdk/typescript/src *.ts
+recursive-include sdk/typescript/test *.mjs *.ts

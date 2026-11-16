@@ -1,4 +1,0 @@
-[run]
-omit =
-    src/molq/submitor/local.py
-    src/molq/submitor/slurm.py

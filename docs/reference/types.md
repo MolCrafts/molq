@@ -1,48 +1,16 @@
-# Job types
+# Request values
 
-Immutable request values, durable records, retry policy, and scheduler queue
-rows.
+These frozen dataclasses describe requests. `to_wire()` returns their JSON form,
+omitting `None` fields. Validation and destination defaults are applied by the
+service when you call `validate`, `preview`, or `submit`.
 
-::: molq.types.Memory
+`JobSpec.argv([...])` constructs a single-command specification. Decorators
+yield this value and receive a `Job`; plain lists or dictionaries are not requests.
 
-::: molq.types.Duration
+Memory is a decimal string of bytes per node. MPI ranks, threads, and allocation
+task budgets are explicit. See [submit jobs](../jobs.md) for complete examples.
 
-::: molq.types.Script
-
-::: molq.types.JobResources
-
-::: molq.types.JobScheduling
-
-::: molq.types.JobExecution
-
-::: molq.types.DependencyRef
-
-::: molq.types.DependencyCondition
-
-::: molq.models.JobRecord
-
-::: molq.models.JobDependency
-
-::: molq.models.StatusTransition
-
-::: molq.models.SubmitorDefaults
-
-::: molq.models.RetryBackoff
-
-::: molq.models.RetryPolicy
-
-::: molq.models.RetentionPolicy
-
-::: molq.models.RememberedAllocation
-
-::: molq.status.JobState
-
-::: molq.scheduler.QueueEntry
-
-::: molq.scheduler.DependencyEdge
-
-::: molq.scheduler.SchedulerCapabilities
-
-::: molq.models.DependencyPreview
-
-::: molq.models.DependencyPreviewItem
+::: molq.domain
+    options:
+      show_root_heading: false
+      members: [JobSpec, Resources, Accelerator, Scheduling, Execution, ExecutionUnit, Launch, UnitRef, Sequence, Parallel]

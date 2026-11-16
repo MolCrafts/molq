@@ -1,176 +1,121 @@
-"""Workspace and Project — remote directory handles tied to a Cluster.
-
-A :class:`Workspace` is a base directory on the cluster's filesystem; a
-:class:`Project` is a sub-namespace under a workspace.  Both expose a small
-file-ops surface that goes through the cluster's :class:`~molq.transport.Transport`,
-so the same code works against a local filesystem or a remote cluster over
-SSH.
-
-Project.submit_job is sugar that overrides :class:`~molq.types.JobExecution`
-``cwd`` to the project's path and forwards to ``submitor.submit_job(...)``.
-
-Decisions:
-  - ``path`` is supplied explicitly; we do not silently SSH to query ``$HOME``.
-  - There is no auto-staging of files referenced in argv — callers run
-    :meth:`upload` explicitly.
-"""
+"""A caller-owned workspace on a registered destination."""
 
 from __future__ import annotations
 
-import shlex
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from pathlib import PurePosixPath
 
-if TYPE_CHECKING:
-    from molq.cluster import Cluster
-    from molq.submitor import JobHandle, Submitor
+from molq.artifact_manifest import ArtifactManifest, ManifestDelivery
+from molq.client.path import Path
 
 
-class _RemoteDir:
-    """Mixin: file-ops backed by ``self.cluster.transport`` rooted at ``self.path``.
+@dataclass(frozen=True)
+class Workspace:
+    """Bind a cluster directory without creating or taking ownership of it.
 
-    Subclasses provide ``cluster`` and ``path`` (as a field or property).
+    Args:
+        root: An absolute, cluster-qualified path. An existing access scope
+            continues to constrain workspace operations.
     """
 
-    cluster: Cluster
-    path: str
+    root: Path
 
-    def upload(self, local: str, *, recursive: bool = False) -> None:
-        """Copy ``local`` into ``self.path`` on the cluster's filesystem."""
-        self.cluster.transport.upload(local, self.path, recursive=recursive)
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.root, Path)
+            or not self.root.cluster
+            or not self.root.is_absolute()
+            or ".." in self.root.parts
+            or any(char in self.root.as_posix() for char in "\x00\r\n")
+        ):
+            raise ValueError("Workspace requires an absolute cluster path")
+
+    def ensure(self) -> Path:
+        """Create the workspace if needed and return its scoped root."""
+        # Check and create through the caller's original scope first.
+        self.root.mkdir(parents=True, exist_ok=True)
+        return self.path()
+
+    def path(self, relative: str = ".") -> Path:
+        """Return a child path constrained to this workspace.
+
+        Args:
+            relative: A relative POSIX path inside the workspace.
+
+        Raises:
+            ValueError: The path is absolute, cluster-qualified or traverses up.
+        """
+        if not isinstance(relative, str) or any(
+            char in relative for char in ":\\\x00\r\n"
+        ):
+            raise ValueError("Expected a relative workspace path")
+        child = PurePosixPath(relative)
+        if not relative or child.is_absolute() or ".." in child.parts:
+            raise ValueError("Expected a relative workspace path")
+        # Preserve inherited scopes before narrowing to the workspace. Resolve
+        # on the target so an alias cannot grant access outside the outer root.
+        root = self.root
+        if root._access_root is not None:
+            root = root.resolve()
+        return Path(root, root=root.as_posix()) / child
+
+    def upload(
+        self,
+        source: Path,
+        relative: str,
+        *options: str,
+        timeout: int = 90,
+        directory: bool | None = None,
+    ) -> dict:
+        """Copy a source to an explicit existing-parent path in this workspace.
+
+        Args:
+            source: File or directory to copy.
+            relative: Destination path relative to the workspace.
+            *options: Explicit rsync options.
+            timeout: Transfer limit in seconds.
+            directory: Set when the source type is known or on a separate serve host.
+
+        Returns:
+            The Runtime transfer result.
+
+        Raises:
+            ValueError: The paths are bound to different clients.
+        """
+        target = self.path(relative)
+        if (
+            source._molq is not None
+            and target._molq is not None
+            and source._molq is not target._molq
+        ):
+            raise ValueError("Bind upload paths to the same Molq client")
+        return Path(source, molq=target._molq).transfer(
+            target, *options, timeout=timeout, directory=directory
+        )
 
     def download(
         self,
-        remote_rel: str,
-        local: str,
+        manifest: ArtifactManifest,
+        destination: Path,
         *,
-        recursive: bool = False,
-    ) -> None:
-        remote = f"{self.path.rstrip('/')}/{remote_rel.lstrip('/')}"
-        self.cluster.transport.download(remote, local, recursive=recursive)
+        select: Sequence[str],
+        relative: str = ".",
+        options: Sequence[str] = (),
+        timeout: int = 90,
+    ) -> ManifestDelivery:
+        """Resolve output names under this workspace and copy the selection.
 
-    def exists(self) -> bool:
-        return self.cluster.transport.exists(self.path)
+        Args:
+            manifest: Named file, glob, or catalog declarations.
+            destination: Explicit destination root.
+            select: Output names or catalog members.
+            relative: Output root relative to the workspace.
+            options: Explicit rsync options.
+            timeout: Limit in seconds for each transfer.
 
-    def ensure(self) -> None:
-        """Create the directory if it doesn't exist (mkdir -p)."""
-        self.cluster.transport.mkdir(self.path, parents=True, exist_ok=True)
-
-    def mirror(
-        self,
-        local_dir: str | Path,
-        *,
-        exclude: Sequence[str] = (),
-    ) -> Path:
-        """Pull the entire remote directory to *local_dir* (mirror).
-
-        Equivalent to ``rsync -a <transport>:<path>/ <local_dir>/``.  Creates
-        *local_dir* if needed.  Subsequent calls perform an incremental
-        sync — only changed files travel.
-
-        Returns the local destination path for convenience.
+        Returns:
+            The selected paths and their transfer results.
         """
-        target = Path(local_dir).expanduser()
-        target.mkdir(parents=True, exist_ok=True)
-        self.cluster.transport.download(
-            self.path,
-            str(target),
-            recursive=True,
-            exclude=tuple(exclude),
-        )
-        return target
-
-    def list_files(self, rel: str = "") -> list[str]:
-        """Return a flat listing of paths under the remote directory.
-
-        Uses ``ls -1A`` on the transport — works for both local and SSH.
-        ``rel`` is a path relative to ``self.path`` (use ``""`` for the root).
-        """
-        target = self.path.rstrip("/")
-        if rel:
-            target = f"{target}/{rel.lstrip('/')}"
-        result = self.cluster.transport.run(
-            ["sh", "-c", f"ls -1A {shlex.quote(target)}"]
-        )
-        if result.returncode != 0:
-            return []
-        return [line for line in result.stdout.splitlines() if line]
-
-    def read_text(self, rel: str) -> str:
-        """Read a remote file relative to this dir as text."""
-        remote = f"{self.path.rstrip('/')}/{rel.lstrip('/')}"
-        return self.cluster.transport.read_text(remote)
-
-    def tail(self, rel: str, *, lines: int = 80) -> str:
-        """Cheap remote tail — runs ``tail -n <lines>`` over the transport.
-
-        Useful for log peeking without dragging the whole file across.
-        Returns ``""`` when the file does not exist yet.
-        """
-        remote = f"{self.path.rstrip('/')}/{rel.lstrip('/')}"
-        result = self.cluster.transport.run(
-            [
-                "sh",
-                "-c",
-                f"tail -n {int(lines)} {shlex.quote(remote)} 2>/dev/null || true",
-            ]
-        )
-        return result.stdout
-
-
-@dataclass
-class Workspace(_RemoteDir):
-    """A base directory on the cluster's filesystem."""
-
-    cluster: Cluster
-    name: str
-    path: str
-
-    def get_project(self, name: str) -> Project:
-        return Project(workspace=self, name=name)
-
-
-@dataclass
-class Project(_RemoteDir):
-    """A sub-namespace under a :class:`Workspace`."""
-
-    workspace: Workspace
-    name: str
-
-    @property
-    def cluster(self) -> Cluster:  # type: ignore[override]
-        return self.workspace.cluster
-
-    @property
-    def path(self) -> str:  # type: ignore[override]
-        return f"{self.workspace.path.rstrip('/')}/{self.name}"
-
-    def submit_job(
-        self,
-        submitor: Submitor,
-        **submit_kwargs: Any,
-    ) -> JobHandle:
-        """Submit a job whose working directory is this project's path.
-
-        Forwards to :meth:`~molq.submitor.Submitor.submit_job`, overriding
-        ``execution.cwd`` to ``self.path``.  Other ``execution`` fields the
-        caller passes pass through unchanged.
-        """
-        from molq.types import JobExecution
-
-        if submitor.target is not self.cluster:
-            raise ValueError(
-                f"Project belongs to cluster {self.cluster.name!r} but submitor "
-                f"is bound to {submitor.target.name!r}"
-            )
-        execution = submit_kwargs.pop("execution", None)
-        if execution is None:
-            execution = JobExecution(cwd=self.path)
-        else:
-            execution = replace(execution, cwd=self.path)
-        return submitor.submit_job(execution=execution, **submit_kwargs)
-
-
-__all__ = ["Workspace", "Project"]
+        resolved = manifest.resolve(self.path(relative), select=select)
+        return resolved.download(destination, options=options, timeout=timeout)

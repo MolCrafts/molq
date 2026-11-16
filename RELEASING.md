@@ -1,67 +1,11 @@
 # Releasing
 
-This repository uses a static version in `pyproject.toml`.
+0.9.0 replaces the 0.8 API without compatibility or automatic jobs.db migration. It does not delete user data or native tasks.
 
-## PyPI Trusted Publisher
+1. Update the version in pyproject.toml, molq.__version__, the binary release, the protocol release and sdk/typescript/package.json/package-lock.json. Regenerate the contract and client types.
+2. Run tools/check_generated.py, Ruff, ty, Python tests with coverage and TypeScript conformance.
+3. Run tools/build_wheels.py --sdist. It cross-builds one py3-none wheel per platform (Linux glibc/musl, macOS 12+, Windows; x86_64 and arm64) and checks each wheel's tag and binary header. Install a wheel into a clean environment and run tools/check_wheel.py outside the checkout. Check package metadata and npm pack contents. The release workflow publishes the artifacts its build job produced with the same script.
+4. Confirm Linux/macOS and Windows control-plane CI. Document native Scheduler mapping limits and actual live-cluster evidence.
+5. Tag only after validation. The existing v* release workflow requires reusable CI and matching package version before PyPI trusted publishing. A master push alone does not publish a package.
 
-This repository is set up to publish through PyPI trusted publishing from GitHub Actions.
-No PyPI API token should be stored in GitHub secrets for the normal release flow.
-
-Configure the trusted publisher in PyPI with:
-
-- Project name: `molcrafts-molq`
-- Owner: `MolCrafts`
-- Repository: `molq`
-- Workflow: `release.yml`
-- Environment: `pypi`
-
-The GitHub repository must also have an environment named `pypi`.
-
-## Release Checklist
-
-1. Ensure `pyproject.toml` has the intended version (e.g. `0.6.0`).
-2. Optionally refresh `docs/release-notes.md` for user-facing highlights.
-   Full history is git log / tags — no `CHANGELOG.md`. Keep README /
-   CLAUDE.md / docs paths current.
-3. Local CI parity (must match `.github/workflows/lint.yml` and `test.yml`):
-
-   ```bash
-   ruff format --check src tests
-   ruff check src tests
-   pre-commit run --all-files
-   pytest -q
-   ```
-
-   Install hooks once with `pre-commit install` so commit/push gate the same
-   checks (static on commit; full pytest on push).
-
-4. Tag the release (tag must match the version, with a `v` prefix):
-
-   ```bash
-   git tag v0.7.0
-   git push origin v0.7.0
-   ```
-
-5. Wait for the `release` workflow. It re-runs lint and the tests (including
-   `test / package`) on the tag, verifies the tag matches `pyproject.toml`,
-   then builds and publishes. Run it by hand (`workflow_dispatch`) for a dry
-   run that builds without uploading.
-6. Publish a GitHub release for the tag; draft notes from `git log` since the
-   previous tag (or from `docs/release-notes.md` if you keep highlights there).
-
-> **Do not build or upload by hand.** Trusted publishing means the artifact
-> that reaches PyPI is the one CI builds from the tag. `python -m build`
-> locally is only ever a debugging aid — the `test / package` job in `test.yml` already
-> builds the wheel, runs `twine check --strict`, installs it into a clean
-> environment, imports every subpackage, and runs a job through the console
-> script on every push and pull request.
-
-## Documentation Release
-
-If documentation dependencies are installed:
-
-```bash
-zensical build
-```
-
-Deploy the generated `site/` directory with your preferred static host.
+TypeScript publishing is a separate explicit registry release; building/testing the package does not publish it.

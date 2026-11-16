@@ -1,227 +1,129 @@
 # Configuration
 
-Configuration profiles collect reusable scheduler options, job defaults,
-retry rules, and retention policy.
+The default configuration is `~/.molcrafts/molq/config.json`. Select another JSON
+or YAML file with `--config`. Configuration files are used individually, not merged.
 
-## Default locations
+## Temporary service
 
-molq uses the MolCrafts configuration root:
+With no endpoint, the CLI starts a temporary stdio service. Python does the same
+with `Molq()`. Cluster definitions persist in the default registry at
+`~/.molcrafts/molq/registry.db`.
 
-| File | Default path |
-|---|---|
-| Profiles | `~/.molcrafts/molq/config/config.yaml` |
-| Job database | `~/.molcrafts/molq/config/jobs.db` |
-
-Set `MOLCRAFTS_HOME` to relocate both:
-
-```bash
-export MOLCRAFTS_HOME=/srv/molcrafts
-```
-
-The project path is then derived below that root. CLI commands accept
-`--config` when only the profile file needs an override.
-
-!!! note "Version 0.5 path change"
-
-    Version 0.5 moved both files from `~/.molq/`. It does not migrate old files
-    automatically.
-
-## Minimal profile
-
-```yaml
-profiles:
-  gpu:
-    scheduler: slurm
-    cluster_name: dardel
-```
-
-Load it in Python:
+Choose separate files for a project:
 
 ```python
-import molq as mq
+import json
 
-cluster = mq.Cluster.from_profile("gpu")
-queue = mq.Submitor.from_profile("gpu", target=cluster)
+from molq import Molq
+
+mq = Molq(registry="./registry.db", config="./config.json")
+print(json.dumps(mq.clusters.list(), ensure_ascii=False))
+mq.close()
 ```
 
-Or from the CLI:
-
-```bash
-molq submit slurm --profile gpu python train.py
+```sh
+molq --registry ./registry.db --config ./config.json cluster list
 ```
 
-## Full profile
+Keep the registry on local disk. Use one active service per registry when sharing
+observations; independent instances do not share caches or cursors.
 
-```yaml
-profiles:
-  gpu:
-    scheduler: slurm
-    cluster_name: dardel
-    jobs_dir: /scratch/alice/.molq/jobs
+## Shared service
 
-    scheduler_options:
-      sbatch_path: sbatch
-      squeue_path: squeue
-      scancel_path: scancel
-      sacct_path: sacct
-      extra_sbatch_flags: ["--clusters=gpu"]
+Save this as `config.json`. Replace the example token with your own token of at
+least 16 characters; server and client tokens must match.
 
-    defaults:
-      resources:
-        cpu_count: 8
-        memory: "34359738368"
-        gpu_count: 1
-        time_limit: 14400
-      scheduling:
-        partition: gpu
-        account: project123
-        qos: normal
-      execution:
-        cwd: /scratch/alice/project
-        job_name: molq-job
-
-    retry:
-      max_attempts: 3
-      retry_on_states: [failed, timed_out]
-      retry_on_exit_codes: [1, 137]
-      backoff:
-        mode: exponential
-        initial_seconds: 10
-        maximum_seconds: 120
-        factor: 2
-
-    retention:
-      keep_job_dirs_for_days: 14
-      keep_terminal_records_for_days: 90
-      keep_failed_job_dirs: true
-
-plugins:
-  nerve:
-    enabled: true
-    expand_threshold: 8
-    debounce_seconds: 0.3
-    ingest_url: "http://127.0.0.1:17890"
-    show_members: attention
+```json
+{
+  "serve": {
+    "host": "127.0.0.1",
+    "port": 17891,
+    "token": "replace-with-your-own-token"
+  },
+  "client": {
+    "endpoint": "http://127.0.0.1:17891",
+    "token": "replace-with-your-own-token"
+  }
+}
 ```
 
-### Units in the config file
+Start the service in one terminal:
 
-Profile values use the serialized storage representation:
-
-| Field | Unit | Example |
-|---|---|---|
-| `memory` | bytes, encoded as a string | `"34359738368"` for 32 GiB |
-| `time_limit` | seconds | `14400` for four hours |
-
-The Python API and CLI accept friendlier constructors and strings:
-`Memory.gb(32)`, `Duration.hours(4)`, `--mem 32G`, and `--time 4h`.
-
-## Profile fields
-
-| Field | Required | Meaning |
-|---|---|---|
-| `scheduler` | yes | `local`, `slurm`, `pbs`, or `lsf` |
-| `cluster_name` | yes | persisted record namespace |
-| `host` | no | SSH destination; omit to run on this machine |
-| `jobs_dir` | no | base directory for scripts and captured logs |
-| `scheduler_options` | no | backend command paths and extra submit flags |
-| `defaults.resources` | no | resource defaults |
-| `defaults.scheduling` | no | queue policy defaults |
-| `defaults.execution` | no | process environment defaults |
-| `retry` | no | default retry policy |
-| `retention` | no | artifact and terminal-record retention |
-
-The `plugins` mapping is top-level rather than nested below a profile. They apply to
-CLI sessions opened from the same config file. `molq daemon` defaults to the
-official Nerve plugin only when no plugin table exists; see
-[Plugins and Nerve](plugins.md).
-
-## Precedence
-
-For job fields:
-
-```text
-submit_job(...) value
-        overrides
-profile / Submitor default
-        overrides
-dataclass default
+```sh
+molq serve --config ./config.json
 ```
 
-Merging happens field by field. A submission can override `cpu_count` while
-retaining profile memory and time limits.
+Use it from another:
 
-## Scheduler options
-
-Each scheduler accepts only its matching option table:
-
-| Scheduler | Option class | Command overrides |
-|---|---|---|
-| local | `LocalSchedulerOptions` | none |
-| SLURM | `SlurmSchedulerOptions` | `sbatch`, `squeue`, `scancel`, `sacct` |
-| PBS | `PBSSchedulerOptions` | `qsub`, `qstat`, `qdel`, `tracejob` |
-| LSF | `LSFSchedulerOptions` | `bsub`, `bjobs`, `bkill`, `bhist` |
-
-Using options for the wrong scheduler raises an error.
-
-## Remote profiles
-
-Set `host` to make the profile describe a remote destination. It accepts
-anything `ssh` accepts, including a `~/.ssh/config` alias:
-
-```yaml
-profiles:
-  gpu:
-    scheduler: slurm
-    cluster_name: dardel
-    host: dardel
-    defaults:
-      resources:
-        cpu_count: 8
-        memory: "32G"
+```sh
+molq --config ./config.json cluster list
 ```
 
-Both halves of the profile then load together — destination and lifecycle:
+Python and TypeScript take the endpoint and token explicitly:
 
 ```python
-import molq as mq
+import json
 
-with mq.Submitor.from_profile("gpu") as queue:
-    job = queue.submit_job(argv=["python", "train.py"])
+mq = Molq(endpoint="http://127.0.0.1:17891", token="replace-with-your-own-token")
+print(json.dumps(mq.clusters.list(), ensure_ascii=False))
+mq.close()
 ```
 
-Omit `host` and the profile runs on the current machine.
+For HTTP connections, the registry and settings file belong to the service.
+`Molq(config=...)` selects a temporary service's file; it does not select an HTTP
+endpoint from the file's `client` section. The CLI does read that section.
 
-To apply a profile's resource defaults to a destination you build yourself,
-pass an explicit target — it wins over the profile's `host`:
+## Settings and presets
 
-```python
-cluster = mq.Cluster("dardel", "slurm", host="dardel-backup")
+Cluster defaults apply to submissions on that destination. Presets are reusable
+request fragments; retrieve one and apply its fields explicitly.
 
-with mq.Submitor.from_profile("gpu", target=cluster) as queue:
-    job = queue.submit_job(argv=["python", "train.py"])
+```json
+{
+  "settings": {"cache_max_entries": 4096, "cache_max_age": 5},
+  "presets": {"small": {"resources": {"tasks": 1, "cpus_per_task": 2}}}
+}
 ```
 
-The CLI picks the host up automatically:
+Manage these through the service:
 
-```bash
-molq submit slurm --profile gpu python train.py
+```sh
+molq rpc config.get --params '{"key":"cache_max_age"}'
+molq rpc config.set --params '{"key":"cache_max_age","value":5}'
+molq rpc presets.get --params '{"key":"small"}'
+molq rpc config.reload
 ```
 
-## Use an isolated database
+`config.reload` applies external edits and resets observation cursors. Invalid
+edits leave the previous settings active. `default_cluster` is a saved preference;
+RPC operations still require an explicit scope.
 
-Applications and tests can construct a store explicitly:
+## Layout upgrade and legacy maintenance
 
-```python
-from molq import Cluster, Submitor
-from molq.store import JobStore
+Stop every old serve and stdio process using the registry. Back up
+`registry.db` and `submissions/<registry-id>/` and remove
+`job_retention_days` from the configuration. On open, the new runtime imports
+legacy submission evidence into the existing SQLite database. Imported keys
+remain reserved and return `CONFLICT` on new submissions. Run
+`maintenance.prune_submissions` to remove only files verified against the
+SQLite copy. The result reports removed and retained filenames.
 
-store = JobStore("./state/jobs.db")
-queue = Submitor(
-    target=Cluster("test", "local"),
-    store=store,
-)
+Old archives are preserved during upgrade. Inspect a cluster's archive, then
+choose specific verified duplicates to delete:
+
+```sh
+molq rpc maintenance.inspect --params '{"cluster":"hpc"}'
+molq rpc maintenance.prune --params '{"cluster":"hpc","entries":["0123456789abcdef0123456789abcdef"]}'
+molq rpc maintenance.prune_submissions
 ```
 
-`JobStore` requires a path. `Submitor(store=None)` is the convenience path that
-opens the canonical MolCrafts database automatically.
+Inspection checks the local manifest and returns an optional `after` value
+for the next page. For a removed cluster, inspect by its original cluster ID. Pruning checks the manifest again and verifies the remote copy. It deletes only
+serve-host archive files whose complete matching copy is still present on the
+target. Interrupted copies, mixed archives, and the only known copies of
+logs or Shell receipts stay available for manual export. The new runtime does
+not look up old Shell runs through these archives.
+
+SSH connection options belong in OpenSSH configuration. molq does not read
+`MOLQ_*` environment variables. See [watch configuration](plugins.md#defaults)
+for cadence and notification routes.

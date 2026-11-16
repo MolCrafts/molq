@@ -1,6 +1,5 @@
 # Managed by prek: `prek install`
-# CI parity: lint.yml runs the pre-commit stage of this file; test.yml runs
-# the ci-test command (no tox wrapper).
+# CI parity: same shell commands as .github/workflows/ci.yml (no tox wrapper).
 # tox remains in [project.optional-dependencies] dev for optional local isolation.
 
 default_install_hook_types: [pre-commit, pre-push]
@@ -27,7 +26,7 @@ repos:
   - repo: local
     hooks:
       - id: ci-lint
-        name: "CI lint (lint.yml)"
+        name: "CI lint (same as test.yml)"
         entry: bash -c 'uv sync --extra dev && uv run ruff check src tests && uv run ruff format --check src tests && uv run ty check src/'
         language: system
         pass_filenames: false
@@ -35,8 +34,8 @@ repos:
         stages: [pre-commit, pre-push]
 
       - id: ci-test
-        name: "CI test (test.yml)"
-        entry: bash -c 'uv sync --extra dev && uv run pytest -q'
+        name: "CI test (same as test.yml)"
+        entry: bash -c 'uv sync --extra dev && uv run pytest -q --cov=molq --cov-report=xml'
         language: system
         pass_filenames: false
         always_run: true

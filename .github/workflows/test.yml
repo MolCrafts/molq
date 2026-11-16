@@ -1,122 +1,222 @@
-name: test
-
-# pytest in two tiers (`test / context` decides, through MolCrafts/molcrafts-ci/actions/ci-context):
-#
-#   fast  a feature-branch push to MolCrafts: Linux, Python 3.12.
-#   full  every push to a fork (proven before its pull request), dev, master
-#         and master on MolCrafts, pull requests, tags and dispatches:
-#         Linux and macOS (molq is POSIX-only) on the oldest and newest
-#         Python.
-#
-# `test / package` checks the built wheel in both tiers.
-on:
-  push:
-    branches: ["**"]
-  pull_request:
-    branches: [dev, master]
-  workflow_dispatch:
-  workflow_call:
-
-permissions:
-  contents: read
-
-# One group per file, workflow, event and ref. Under workflow_call (release.yml
-# running lint/test) github.workflow and github.event_name are the caller's, so
-# a called run never shares, and so never cancels, a direct run's group.
 concurrency:
   group: test-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ !contains(fromJSON('["refs/heads/dev","refs/heads/master"]'), github.ref) && !startsWith(github.ref, 'refs/tags/') }}
+name: test
+
+'on':
+  push:
+    branches:
+    - '**'
+  pull_request:
+    branches:
+    - dev
+    - master
+  workflow_call: null
+
+env:
+  UV_NO_SOURCES: "true"
+  CGO_ENABLED: "0"
 
 jobs:
-  # Where this run happens, decided once: MolCrafts/molcrafts-ci/actions/ci-context.
   context:
-    name: test / context
-    runs-on: ubuntu-latest
-    outputs:
-      tier: ${{ steps.context.outputs.tier }}
-      upstream: ${{ steps.context.outputs.upstream }}
-      integration: ${{ steps.context.outputs.integration }}
-      skip-pr: ${{ steps.context.outputs.skip-pr }}
-      cancel: ${{ steps.context.outputs.cancel }}
-    steps:
-      - id: context
-        uses: MolCrafts/molcrafts-ci/actions/ci-context@master
+    permissions:
+      contents: read
+    name: test
+    uses: MolCrafts/molcrafts-ci/.github/workflows/context.yml@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
 
-  python:
-    name: test / python (${{ matrix.os }}, ${{ matrix.python }})
-    needs: context
+  docs:
     if: needs.context.outputs.skip-pr != 'true'
+    needs:
+    - context
+    name: test / Manual
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra docs
+      - run: uv run --extra docs zensical build --strict
+
+  lint:
+    if: needs.context.outputs.skip-pr != 'true'
+    needs:
+    - context
+    name: test / Contract, lint and types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
+        with:
+          python-version: "3.12"
+
+      - uses: MolCrafts/molcrafts-ci/actions/setup-node@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
+        with:
+          working-directory: sdk/typescript
+      - run: uv sync --extra dev
+      - run: uv run python tools/check_generated.py
+      - run: |
+          uv run ruff check src tests tools examples
+          uv run ruff format --check src tests tools examples
+          uv run ty check src/
+
+  go:
+    if: needs.context.outputs.skip-pr != 'true'
+    needs:
+    - context
+    name: test / Go serve on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
       matrix:
-        os: ${{ fromJSON(needs.context.outputs.tier == 'full' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-        python: ${{ fromJSON(needs.context.outputs.tier == 'full' && '["3.12","3.13"]' || '["3.12"]') }}
-    env:
-      UV_PYTHON: ${{ matrix.python }}
+        os: ${{ fromJSON(needs.context.outputs.tier == 'full' && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: MolCrafts/molcrafts-ci/actions/setup-python@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - name: Check concurrent runtime operations
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -race ./...
+        env:
+          CGO_ENABLED: "1"
+
+  test:
+    if: needs.context.outputs.skip-pr != 'true'
+    needs:
+    - context
+    name: test / Python ${{ matrix.python }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: ${{ fromJSON(needs.context.outputs.tier == 'full' && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
+        python: ${{ fromJSON(needs.context.outputs.tier == 'full' && '["3.12", "3.13"]' || '["3.12"]') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: ${{ matrix.python }}
+      - name: Build the current platform serve executable
+        run: |
+          mkdir -p src/molq/_bin
+          go build -o src/molq/_bin/molq ./cmd/molq
       - run: uv sync --extra dev
-      - run: uv run pytest -q
+      - run: uv run pytest -q --cov=molq --cov-report=xml
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          fail_ci_if_error: false
 
-  # pytest imports from src/, so a packaging config that silently drops a
-  # module would still go green and ship a broken wheel. This job only ever
-  # touches the built artifact.
+  windows:
+    if: needs.context.outputs.skip-pr != 'true'
+    needs:
+    - context
+    name: test / Windows remote control plane
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
+        with:
+          python-version: "3.12"
+      - name: Compile the Windows serve executable and tests
+        run: |
+          New-Item -ItemType Directory -Force src/molq/_bin | Out-Null
+          go build -o src/molq/_bin/molq.exe ./cmd/molq
+          go test ./... -run '^$'
+      - run: uv sync --extra dev
+      - run: uv run pytest -q tests/v09/test_control_plane.py tests/v09/test_contract.py tests/v09/test_wire.py -k "not no_service"
+
+  typescript:
+    if: needs.context.outputs.skip-pr != 'true'
+    needs:
+    - context
+    name: test / Native TypeScript peer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
+        with:
+          python-version: "3.12"
+
+      - uses: MolCrafts/molcrafts-ci/actions/setup-node@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
+        with:
+          working-directory: sdk/typescript
+      - name: Build the current platform serve executable
+        run: |
+          mkdir -p src/molq/_bin
+          go build -o src/molq/_bin/molq ./cmd/molq
+      - run: uv sync --extra dev
+      - run: npm --prefix sdk/typescript test
+        env:
+          MOLQ_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
+      - run: npm pack --dry-run
+        working-directory: sdk/typescript
+
   package:
-    name: test / package
+    if: needs.context.outputs.skip-pr != 'true'
+    needs:
+    - context
+    name: test / Installed artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build twine
+      - name: Cross-build and verify every release wheel
+        run: python tools/build_wheels.py --sdist
+      - run: python -m twine check --strict dist/*
+      - run: |
+          python -m venv /tmp/molq-wheel
+          /tmp/molq-wheel/bin/pip install dist/*-manylinux2014_x86_64.*.whl
+      - name: Check wheel outside checkout
+        working-directory: /tmp
+        run: /tmp/molq-wheel/bin/python "${{ github.workspace }}/tools/check_wheel.py"
+      - name: Check installed console
+        working-directory: /tmp
+        run: |
+          /tmp/molq-wheel/bin/molq --version
+          /tmp/molq-wheel/bin/molq --help
+
+  workflow-policy:
+    name: test / workflows
     needs: context
     if: needs.context.outputs.skip-pr != 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: MolCrafts/molcrafts-ci/actions/setup-python@master
-      - run: uv build
-      - run: uvx twine check --strict dist/*
-      - name: Install the wheel into a clean environment
-        run: |
-          uv venv /tmp/wheelcheck
-          uv pip install --python /tmp/wheelcheck dist/*.whl
-      - name: Import every subpackage from the wheel
-        # Run outside the checkout so src/ cannot satisfy these imports.
-        working-directory: /tmp
-        run: |
-          /tmp/wheelcheck/bin/python - <<'PY'
-          import importlib
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+    - uses: MolCrafts/molcrafts-ci/actions/check-workflows@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
 
-          # One entry per module that must survive packaging. A subpackage
-          # missing from the wheel fails here rather than on a user's machine.
-          modules = [
-              "molq",
-              "molq.cli._app", "molq.cli._helpers", "molq.cli.jobs",
-              "molq.cli.main", "molq.cli.maintenance", "molq.cli.setup",
-              "molq.scheduler", "molq.scheduler.base", "molq.scheduler.script",
-              "molq.scheduler.shell", "molq.scheduler.slurm",
-              "molq.scheduler.pbs", "molq.scheduler.lsf",
-              "molq.store", "molq.store.jobstore", "molq.store.records",
-              "molq.store.schema",
-              "molq.plugins.nerve",
-              "molq.artifacts", "molq.dependencies", "molq.handle",
-              "molq.jobpaths", "molq.retention", "molq.retry",
-              "molq.validation", "molq.workspace", "molq.dashboard",
-          ]
-          for name in modules:
-              importlib.import_module(name)
-
-          import molq
-          assert molq.__all__, "public surface is empty"
-          for name in molq.__all__:
-              getattr(molq, name)  # includes the lazily-exported dashboard names
-          print(f"{len(modules)} modules, {len(molq.__all__)} public names OK")
-          PY
-      - name: Run a real job through the installed console script
-        working-directory: /tmp
+  result:
+    name: test / result
+    needs: [context, docs, lint, go, test, windows, typescript, package, workflow-policy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job succeeded or was skipped
         env:
-          MOLCRAFTS_HOME: /tmp/wheelcheck-home
-        run: |
-          /tmp/wheelcheck/bin/molq --version
-          /tmp/wheelcheck/bin/molq --help > /dev/null
-          /tmp/wheelcheck/bin/molq submit local --block echo packaged
-          /tmp/wheelcheck/bin/molq list local --all
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: echo "$RESULTS" | jq -e 'all(.[]; . == "success" or . == "skipped")'

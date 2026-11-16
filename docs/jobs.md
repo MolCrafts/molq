@@ -1,270 +1,189 @@
 # Submit jobs
 
-This guide covers the request you pass to `Submitor.submit_job()`: command,
-resources, scheduling policy, execution environment, retries, and
-dependencies.
-
-## Choose a command form
-
-Exactly one command form is required.
-
-| Form | Use it for | Shell interpreted? |
-|---|---|---|
-| `argv=[...]` | Programs with explicit arguments | No |
-| `command="..."` | A one-line shell expression | Yes |
-| `script=Script...` | Multi-line or existing shell scripts | Yes |
-
-### Argument vector
-
-Prefer `argv` for ordinary programs:
+Decorate a function with a registered destination:
 
 ```python
-job = queue.submit_job(
-    argv=["python", "train.py", "--epochs", "50"]
-)
+from molq import JobSpec, submit
+
+local = submit("local", project_root="/absolute/project")
+
+
+@local
+def hello(name):
+    job = yield JobSpec.argv(["echo", f"hello {name}"])
+    return job
+
+
+job = hello("molq")
 ```
 
-Each item is one argument. Wildcards, `$VARS`, pipes, and redirects are not
-expanded.
+Every yielded request is a `JobSpec`. Use `JobSpec.argv(...)` for one command;
+use the full constructor for resources, scheduling, and execution plans.
+Each yield receives its `Job`. The generator's return is the decorated call's
+result. See the [Python API](api.md) for synchronous and async examples.
 
-### Shell command
+Arguments remain literal. Request shell interpretation explicitly with
+`ExecutionUnit.shell()` when you need pipes or redirection.
 
-Use `command` when shell syntax is the point:
+## Request an allocation
 
-```python
-job = queue.submit_job(
-    command="python analyse.py | gzip > results.txt.gz"
-)
-```
-
-### Script
-
-Use an inline script for a short multi-step workflow:
+On a registered Slurm destination, request resources and queue settings separately
+from the command:
 
 ```python
-import molq as mq
+import json
 
-job = queue.submit_job(
-    script=mq.Script.inline(
-        """\
-set -euo pipefail
-python preprocess.py
-python train.py
-"""
-    )
-)
-```
+from molq import Execution, ExecutionUnit, JobSpec, Resources, Scheduling, submit
 
-Or submit an existing file:
-
-```python
-job = queue.submit_job(script=mq.Script.path("run.sh"))
-```
-
-## Describe resources, scheduling, and execution
-
-molq keeps three concerns separate:
-
-| Object | Describes | Typical fields |
-|---|---|---|
-| `JobResources` | Hardware and time | CPU, memory, GPU, wall time |
-| `JobScheduling` | Queue policy | partition, account, QoS, dependency |
-| `JobExecution` | Process environment | cwd, name, env, output paths |
-
-```python
-import molq as mq
-
-job = queue.submit_job(
-    argv=["python", "train.py"],
-    resources=mq.JobResources(
-        cpu_count=8,
-        memory=mq.Memory.gb(32),
-        gpu_count=1,
-        time_limit=mq.Duration.hours(4),
+spec = JobSpec(
+    resources=Resources(
+        nodes=1,
+        tasks=1,
+        cpus_per_task=4,
+        memory_bytes="8000000000",
+        time_limit_seconds=600,
     ),
-    scheduling=mq.JobScheduling(
-        partition="gpu",
-        account="project123",
-        qos="normal",
-    ),
-    execution=mq.JobExecution(
-        cwd="/scratch/alice/project",
-        job_name="train-resnet",
-        env={"OMP_NUM_THREADS": "8"},
+    scheduling=Scheduling(name="simulation", account="your-project"),
+    execution=Execution(
+        cwd="/scratch/your-user/project",
+        env={"OMP_NUM_THREADS": "4"},
+        units=(ExecutionUnit.argv("main", ["python", "simulate.py"]),),
     ),
 )
+hpc = submit("hpc", project_root="/shared/project")
+print(json.dumps(hpc.preview(spec), ensure_ascii=False))
+
+
+@hpc
+def simulate():
+    job = yield spec
+    return job
 ```
 
-Values remain typed in Python:
+`memory_bytes` is a decimal string of bytes **per node**. The scheduler rounds
+up to its native unit. CPU allocation does not set your application's thread
+count; specify that in its arguments or environment.
+
+`validate(spec)` checks the request. `preview(spec)` also returns the rendered
+script. Neither proves that an account, partition, or resource is available.
+
+## Execution plans
+
+Run two branches together, then a final command. This example fits a single-node
+Slurm allocation with two CPUs:
 
 ```python
-mq.Memory.parse("32G")
-mq.Duration.parse("2h30m")
-mq.Duration.parse("04:00:00")
-```
+import json
 
-The selected scheduler validates unsupported fields before submission. For
-example, a local job cannot request a SLURM partition.
+from molq import Parallel, Sequence, UnitRef
 
-## Reuse an allocation you have used before
-
-Every successful submission records its partition / account / QoS /
-reservation combination against the cluster. Recalling them is purely local —
-no query goes to the scheduler:
-
-```python
-for allocation in queue.remembered_allocations(limit=5):
-    print(
-        allocation.partition,
-        allocation.account,
-        allocation.use_count,
-    )
-```
-
-Results come back most-recently-used first. This is what lets a submission UI
-offer "the accounts you actually charge to" without asking the cluster, and
-it survives retention cleanup — the memory lives apart from the `jobs` table,
-so expiring old records does not erase it.
-
-A configuration with none of those four fields set is not worth remembering
-and is skipped.
-
-## Set reusable defaults
-
-Defaults belong to the `Submitor`; values supplied to `submit_job()` override
-them field by field.
-
-```python
-defaults = mq.SubmitorDefaults(
-    resources=mq.JobResources(
-        cpu_count=4,
-        memory=mq.Memory.gb(16),
-        time_limit=mq.Duration.hours(2),
-    ),
-    scheduling=mq.JobScheduling(partition="compute"),
-)
-
-with mq.Submitor(target=cluster, defaults=defaults) as queue:
-    job = queue.submit_job(
-        argv=["python", "analyse.py"],
-        resources=mq.JobResources(cpu_count=8),
-    )
-```
-
-This job uses eight CPUs while inheriting memory, time, and partition.
-Configuration profiles can supply the same defaults; see
-[Configuration](configuration.md).
-
-## Retry failures
-
-`max_attempts` counts the first submission. A value of `3` means at most two
-retries.
-
-```python
-policy = mq.RetryPolicy(
-    max_attempts=3,
-    retry_on_states=(mq.JobState.FAILED, mq.JobState.TIMED_OUT),
-    retry_on_exit_codes=(1, 137),
-    backoff=mq.RetryBackoff(
-        mode="exponential",
-        initial_seconds=10,
-        maximum_seconds=120,
-    ),
-)
-
-job = queue.submit_job(
-    argv=["python", "train.py"],
-    retry=policy,
-)
-final_record = job.wait()
-```
-
-Each retry is a new persisted attempt with its own job ID. The original handle
-follows the family to its latest attempt. Inspect all attempts with:
-
-```python
-family = queue.get_retry_family(job.job_id)
-```
-
-## Add job dependencies
-
-Dependencies use **molq job IDs**, not scheduler IDs. They are supported by
-SLURM, PBS, and LSF, but not by the local scheduler.
-
-```python
-prepare = queue.submit_job(argv=["python", "prepare.py"])
-
-train = queue.submit_job(
-    argv=["python", "train.py"],
-    after_success=[prepare.job_id],
-)
-
-cleanup = queue.submit_job(
-    argv=["python", "cleanup.py"],
-    after=[train.job_id],
-)
-```
-
-| Keyword | Child becomes eligible after the parent… |
-|---|---|
-| `after_success` | succeeds |
-| `after_failure` | fails, is cancelled, times out, or is lost |
-| `after_started` | starts running |
-| `after` | reaches any terminal state |
-
-Each keyword accepts a list, so a job can wait for several upstream jobs.
-For programmatically built schedules, the equivalent representation is a tuple
-of `DependencyRef` objects in `JobScheduling.dependencies`.
-
-## Find logs and artifacts
-
-Unless paths are overridden, molq creates a job directory below the resolved
-working directory:
-
-```text
-<cwd>/.molq/jobs/<job-id>/
-```
-
-The resolved paths are stored in `JobRecord.metadata`:
-
-```python
-record = job.wait()
-print(record.metadata["molq.job_dir"])
-print(record.metadata["molq.stdout_path"])
-print(record.metadata["molq.stderr_path"])
-```
-
-For remote destinations, use `queue.fetch_logs()` or
-`queue.fetch_artifacts()` to copy results to the local machine. See
-[Monitor jobs](monitoring.md#read-logs).
-
-## A complete HPC submission
-
-```python
-import molq as mq
-
-cluster = mq.Cluster("dardel", "slurm", host="dardel")
-
-with mq.Submitor(target=cluster) as queue:
-    job = queue.submit_job(
-        argv=["python", "train.py", "--seed", "42"],
-        resources=mq.JobResources(
-            cpu_count=8,
-            memory=mq.Memory.gb(32),
-            gpu_count=1,
-            time_limit=mq.Duration.hours(4),
+plan_spec = JobSpec(
+    resources=Resources(nodes=1, tasks=2, cpus_per_task=1),
+    execution=Execution(
+        units=(
+            ExecutionUnit.argv(
+                "a", ["echo", "a"], placement={"tasks": 1, "cpus_per_task": 1}
+            ),
+            ExecutionUnit.argv(
+                "b", ["echo", "b"], placement={"tasks": 1, "cpus_per_task": 1}
+            ),
+            ExecutionUnit.argv(
+                "finish", ["echo", "done"], placement={"tasks": 1, "cpus_per_task": 1}
+            ),
         ),
-        scheduling=mq.JobScheduling(
-            partition="gpu",
-            account="project123",
-        ),
-        execution=mq.JobExecution(
-            cwd="/cfs/klemming/scratch/a/alice/my-run",
-            job_name="train-42",
-        ),
-        retry=mq.RetryPolicy(max_attempts=2),
-        metadata={"experiment": "baseline"},
-    )
-
-    print(job.job_id)
+        plan=Sequence((Parallel((UnitRef("a"), UnitRef("b"))), UnitRef("finish"))),
+    ),
+)
+print(json.dumps(hpc.preview(plan_spec), ensure_ascii=False))
 ```
+
+Each unit appears once in the plan. A single unit needs no explicit plan.
+`Sequence` stops on failure. `Parallel` waits for all started branches and
+reports the first failure in plan order. Multiple units in a batch job require
+an explicit task budget; parallel branches must fit that budget.
+
+## MPI
+
+Declare ranks and threads, and configure the cluster's launcher:
+
+```python
+from molq import Launch
+
+mpi_spec = JobSpec(
+    resources=Resources(nodes=2, tasks=8, cpus_per_task=2),
+    execution=Execution(
+        units=(
+            ExecutionUnit.argv(
+                "main",
+                ["./solver"],
+                launch=Launch(kind="mpi", ranks=8, threads=2),
+            ),
+        )
+    ),
+)
+```
+
+On Slurm with `launcher="srun"`, this renders an eight-rank native step.
+The target must provide the executable and MPI environment.
+
+## Dependencies
+
+A dependency refers to another allocation in the same cluster:
+
+```python
+# previous is a submitted Job; next_execution is an Execution value.
+dependent = JobSpec(
+    execution=next_execution,
+    scheduling=Scheduling(
+        dependencies=({"ref": previous.ref, "condition": "after_success"},)
+    ),
+)
+```
+
+Conditions are `after`, `after_success`, `after_failure`, and `after_started`.
+The scheduler must support the requested condition exactly; see [mappings](schedulers.md#scheduler-mappings).
+
+Save `job.ref` after submission, or `collection.refs` for an array. Provide a
+`request_key` to make one submission recoverable across serve restarts. Repeat
+the same request and key to retrieve its receipt or reconcile with native
+evidence. An unresolved submission returns `OUTCOME_UNKNOWN` and repeating
+the key never resends it. Different parameters with the same key conflict.
+Cancel keys remain scoped to one serve instance.
+
+### Slurm job arrays
+
+Set `Scheduling(array=JobArray((0, 1, 4), max_concurrent=2))` on a job spec.
+Slurm receives one submission and runs each index in its own working directory.
+The payload can read `SLURM_ARRAY_TASK_ID`. Python and TypeScript return a
+`JobCollection`; CLI and RPC return `array_id`, `refs`, and `snapshots`.
+Each element reference can be used independently for status, logs, dependencies,
+and cancellation. The supported request size is 1–64 elements. Slurm decides
+which indices and concurrency limits the site accepts.
+
+For a Slurm plan with parallel branches, request one node, explicit tasks and
+memory, and CPU-only resources. Each step receives its own CPU allocation
+and a share of the requested memory proportional to its CPU count. Parallel
+MPI uses the cluster's explicit `srun` launcher.
+
+## Native Slurm requeue
+
+Set `Scheduling(requeue=True)` to opt into the site's native requeue policy.
+Use `job.requeue()` or `molq job requeue --ref @ref.json` for an explicit
+request on an incomplete Slurm job or individual array element. The native
+scheduler decides whether to accept it. Acceptance does not confirm that the
+job has restarted. Slurm may reset its submission time; use the new JobRef
+from `job list` or native history for the restarted incarnation.
+To rerun a finished array element, submit a new array with just the intended
+indices and a fresh request key.
+
+Slurm snapshots retain the raw state and native diagnostic fields. An allocation
+reported as `FAILED` can have an `out_of_memory` reason when native accounting
+shows an OOM step. The allocation's original state and the step evidence are
+both preserved.
+
+## Project logs and outputs
+
+Pass the existing target project directory as `project_root` when submitting.
+Default logs and Shell receipts follow that project. Use an
+[artifact manifest](api.md#select-named-outputs-with-a-manifest) to download
+named user outputs. See [files and logs](remote-files.md) for log access.

@@ -1,150 +1,125 @@
-# Remote files
+# Files and logs
 
-molq does not implicitly upload files named in a command. `Workspace` and
-`Project` make staging explicit and route every file operation through the
-cluster's transport.
+Each submission writes default stdout and stderr beneath
+`<project_root>/.molq/jobs/<run_id>/` on the target. Shell writes its original
+launch and exit receipts there too. Slurm arrays use a separate subdirectory
+for each element. Log and receipt lifetime follows the project.
 
-## Before you start
+The host can read ranges through `logs.read` or copy a full log with the
+existing rsync transfer. Use a [named artifact manifest](api.md#select-named-outputs-with-a-manifest)
+to download selected user outputs. Observing a completed job leaves all
+files on the target.
 
-Verify both SSH and rsync:
+## Read job output
 
-```bash
-ssh dardel hostname
-rsync --version
+```python
+import json
+
+chunk = job.logs(stream="stdout", offset=0, limit=65536)
+print(json.dumps(chunk, ensure_ascii=False))
+next_offset = chunk["next_offset"]
 ```
 
-Create the destination with an SSH alias:
+Use `stream="stderr"` for errors. Read subsequent chunks from `next_offset`.
+Each read is bounded to 256 KiB and checks the job reference's identity.
+
+`job.logs()` reads the allocation's native output paths. Copy a redirected
+stdout or stderr file back with `transfer`.
+
+## Transfer files
+
+`molq transfer` is rsync syntax. Operands are `CLUSTER:PATH` or a local path,
+read the way rsync reads `HOST:PATH`: a colon before the first slash names a
+registered cluster. Options go to rsync unchanged and nothing is implied, so
+write `-a` and `--delete` yourself. A trailing slash means what it means to
+rsync.
+
+```sh
+molq transfer --transfer-deadline 600 -av --exclude build/ ./inputs/ hpc:/shared/project/inputs/
+molq transfer -a hpc:runs/run_01/out.xyz .
+```
+
+`CLUSTER:relative` is relative to that login's home. A local path is resolved
+against the shell's working directory, and it names the serve host's
+filesystem; with a remote `--endpoint`, that is the serve machine. One rsync
+run copies between a local path and one SSH cluster, or within one host.
+Two distinct SSH clusters require explicit local staging, as with rsync.
+`-e`/`--rsh`, `--rsync-path`, `-M`/`--remote-option` and daemon options belong
+to the cluster transport and are rejected. The result carries rsync's stdout
+under `output`, bounded to 1 MiB. `--transfer-deadline SECONDS` sets MolQ's
+total copy limit from 1 to 3600 seconds (default 90). rsync's own `--timeout`
+still controls its I/O timeout. In Python, set `timeout=` on the transfer and
+allow at least 15 extra seconds on `Molq(timeout=...)` for long transfers.
+
+A destination handle keeps the same copy:
+
+```python
+local.transfer("/home/you/project/", hpc, "/scratch/you/project/", "-a", "--exclude=build/")
+```
+
+In Python, each option is one word with its value attached (`--exclude=build/`).
+
+## Cluster paths
+
+`mq.Path` is a POSIX path that also names its cluster. Path arithmetic keeps
+the cluster; I/O goes through the serve process.
 
 ```python
 import molq as mq
 
-cluster = mq.Cluster("dardel", "slurm", host="dardel")
+run = mq.Path("hpc:/scratch/you/run_01")
+log = run / "out.log"              # Path('hpc:/scratch/you/run_01/out.log')
+if log.exists():
+    print(log.read_text())
+for xyz in run.glob("frames/*.xyz"):
+    print(xyz.name, xyz.stat().st_size)
+(run / "input.json").write_text("{}")
+run.transfer(mq.Path("results/run_01"), "-a")
 ```
 
-## Workspace and Project
+A path without a cluster is local and uses `pathlib`. The methods follow
+`pathlib`: `exists`, `is_file`, `is_dir`, `is_symlink`, `stat`, `iterdir`,
+`glob`, `rglob`, `read_text`, `read_bytes`, `write_text`, `write_bytes`,
+`mkdir`, `touch`, `unlink`, `rmdir`, `rename`, `replace`. Precondition
+failures raise the matching `FileNotFoundError`, `FileExistsError`,
+`NotADirectoryError`, `IsADirectoryError` or `OSError`; other failures raise
+`MolqError`.
 
-A `Workspace` is a known base directory on the destination. A `Project` is a
-named directory below it.
+- `str(path)` is `CLUSTER:PATH` and round-trips through `mq.Path`;
+  `as_posix()` is the path on its host. Pickling keeps the cluster.
+- A cluster path has no `os.fspath`, so it cannot reach a local `open()` by
+  mistake.
+- `transfer(destination, *options)` makes `destination` a copy of the path. A
+  directory is copied as its contents, `SRC/ DEST/` in rsync terms.
+- `stat()` returns mode, uid, gid, size and whole-second mtime; the other
+  fields are zero. Writes create missing parent directories. A write larger
+  than 256 KiB is staged beside the file and renamed into place. Each listed
+  directory costs one RPC, so a deep `rglob` on a cluster is slow.
+- Paths use one process-wide `Molq()` unless you bind a client:
+  `mq.Path("hpc:/scratch", molq=client)`. Derived paths keep it.
+
+## Scoped application access
+
+Bind paths to the application's own client and allowed root:
 
 ```python
-workspace = cluster.get_workspace(
-    "scratch",
-    path="/cfs/klemming/scratch/a/alice",
-)
-project = workspace.get_project("protein-screen")
-
-print(project.path)
-# /cfs/klemming/scratch/a/alice/protein-screen
+with mq.Molq(timeout=3610) as client:
+    root = mq.Path("hpc:/scratch/team/workspace", molq=client,
+                   root="/scratch/team/workspace")
+    page = root.list_page(with_stat=True, limit=256)
+    batch = root.read_many([(root / "workspace.json").as_posix()])
+    root.transfer(mq.Path("downloads/workspace", molq=client), "-a", timeout=3600)
 ```
 
-Constructing these objects performs no I/O.
+`list_page` returns `entries` and `next_after`. Pass `after=page["next_after"]`
+for the next page. `read_many` accepts destination paths, up to 128 per call,
+with 256 KiB per file and 512 KiB total raw content. Each item has `data` or
+an `error`; a capacity error never means a truncated success. Root constraints
+are checked on the destination, including symlinks inside directory transfers.
+They constrain operations and do not create a separate user permission system.
 
-## Create and upload
-
-```python
-project.ensure()
-project.upload("./src", recursive=True)
-project.upload("./config.toml")
-```
-
-Paths are copied into the remote project directory. Use `exists()` and
-`list_files()` to inspect it:
-
-```python
-if project.exists():
-    for name in project.list_files():
-        print(name)
-```
-
-## Submit in the project directory
-
-`Project.submit_job()` sets `JobExecution.cwd` to the project path:
-
-```python
-with mq.Submitor(target=cluster) as queue:
-    job = project.submit_job(
-        queue,
-        argv=["python", "src/train.py", "--config", "config.toml"],
-        resources=mq.JobResources(
-            cpu_count=8,
-            memory=mq.Memory.gb(32),
-            time_limit=mq.Duration.hours(4),
-        ),
-        scheduling=mq.JobScheduling(
-            partition="gpu",
-            account="project123",
-        ),
-    )
-    print(job.job_id)
-```
-
-The `Submitor` must target the same `Cluster` instance as the project.
-
-## Read and download results
-
-Read a small remote text file without staging the whole directory:
-
-```python
-print(project.read_text("summary.txt"))
-print(project.tail(".molq/jobs/JOB_ID/stdout.log", lines=40))
-```
-
-Download one result:
-
-```python
-project.download("results.csv", "./results.csv")
-```
-
-Download a directory recursively:
-
-```python
-project.download("outputs", "./outputs", recursive=True)
-```
-
-To mirror the entire workspace or project, use `mirror()`:
-
-```python
-project.mirror("./local-copy", exclude=("*.tmp", ".cache"))
-```
-
-## Sync from the CLI
-
-Push a local directory:
-
-```bash
-molq workspace sync ./src \
-  --cluster dardel \
-  --path /cfs/klemming/scratch/a/alice/protein-screen/src
-```
-
-Pull results:
-
-```bash
-molq workspace sync ./results \
-  --pull \
-  --cluster dardel \
-  --path /cfs/klemming/scratch/a/alice/protein-screen/results
-```
-
-List the remote directory:
-
-```bash
-molq workspace list \
-  --cluster dardel \
-  --path /cfs/klemming/scratch/a/alice/protein-screen
-```
-
-`--cluster` must name a `Host` entry declared in `~/.ssh/config`. Workspace
-commands operate on the remote side, so an unknown name is rejected with the
-list of aliases molq can see rather than silently copying into a local
-directory.
-
-## Keep staging predictable
-
-- Upload code and inputs before submission.
-- Use an absolute remote workspace path.
-- Treat `argv` paths as relative to `JobExecution.cwd`.
-- Download outputs explicitly; a completed job does not copy them back.
-- Keep large reusable datasets outside per-job directories.
-- Use `molq logs` to read a remote log in place; `queue.fetch_logs()` when you
-  want a local copy, and `queue.fetch_artifacts()` for the whole job bundle.
+For an existing SSH alias that needs a verification response, call
+`client.cluster("hpc").authenticate(code)`. The response is used once through a
+private temporary helper and is never persisted. Key-based file operations work
+directly; they do not require a pre-existing master. Authentication rejection,
+connection timeout and an unreachable destination have separate error kinds.

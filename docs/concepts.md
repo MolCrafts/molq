@@ -1,160 +1,36 @@
-# Mental model
+# Jobs and clusters
 
-molq separates **where a job runs** from **how that job is tracked**. Most API
-decisions become straightforward once those two responsibilities stay
-separate.
+A **cluster** is a named destination: which scheduler to use, how to reach it,
+and where to place job files. It may be your laptop or an HPC login account.
 
-## The request path
+A **job** is one allocation. It contains one command or a plan of commands that
+run inside that allocation.
 
-```text
-your code
-   │
-   ▼
-Submitor ── submits, persists, reconciles, waits
-   │ target
-   ▼
-Cluster ─── Scheduler: local / SLURM / PBS / LSF
-   │
-   └──────── Transport: this machine / SSH
-```
-
-The scheduler speaks the batch system's language. The transport decides where
-those scheduler commands and file operations execute.
-
-## Cluster: the destination
-
-A `Cluster` combines three pieces of destination configuration:
-
-1. A stable name such as `"laptop"` or `"dardel"`.
-2. A scheduler kind: `"local"`, `"slurm"`, `"pbs"`, or `"lsf"`.
-3. A transport: local subprocesses by default, SSH when `host=` is provided.
-
-```python
-import molq as mq
-
-laptop = mq.Cluster("laptop", "local")
-dardel = mq.Cluster("dardel", "slurm", host="dardel")
-```
-
-A `Cluster` does not own job history. It is cheap to construct and is also the
-entry point for destination-side operations:
-
-```python
-dardel.get_queue()
-dardel.get_workspace("scratch", path="/cfs/klemming/scratch/a/alice")
-```
-
-## Submitor: the lifecycle owner
-
-`Submitor` is the queue-facing API. It owns:
-
-- submission and cancellation;
-- the SQLite job store;
-- scheduler reconciliation;
-- blocking waits and retries;
-- lifecycle events, plugins, and retention.
-
-Every `Submitor` is bound to one `Cluster`:
-
-```python
-with mq.Submitor(target=dardel) as queue:
-    job = queue.submit_job(argv=["python", "train.py"])
-    record = job.wait()
-```
-
-Create one `Submitor` per destination. They use the same default database but
-filter records by cluster name.
-
-```python
-local_queue = mq.Submitor(target=laptop)
-hpc_queue = mq.Submitor(target=dardel)
-
-local_queue.list_jobs()  # only "laptop"
-hpc_queue.list_jobs()    # only "dardel"
-```
-
-Passing an explicit `store=` to several Submitors is safe: each one closes
-only a store it opened itself, so closing one does not disconnect its
-siblings.
-
-## Scheduler and transport are independent
-
-These are different questions:
-
-| Question | Object | Examples |
+| Value | Describes | Example |
 |---|---|---|
-| Which queue system accepts the job? | Scheduler | local, SLURM, PBS, LSF |
-| Where do its commands execute? | Transport | this host, SSH host |
+| `Resources` | Allocation size | 4 tasks, 2 CPUs per task, 8 GB per node |
+| `Scheduling` | Placement in the queue | Account, partition, name, dependencies |
+| `Execution` | Work inside the allocation | Commands, environment, working directory |
+| `JobRef` | A saved allocation identity | Registry, cluster, native ID, incarnation |
 
-That produces useful combinations:
+An execution unit is one command. `Sequence` runs units in order; `Parallel`
+runs branches together. Both compose into a single job. Use separate submissions
+when you want separate allocations. See [execution plans](jobs.md#execution-plans).
 
-| Scheduler | Transport | Meaning |
-|---|---|---|
-| local | local | Run a normal process on this machine |
-| local | SSH | Run a normal process on a remote workstation |
-| SLURM | local | Run `sbatch` on the current login node |
-| SLURM | SSH | Run `sbatch` on a remote cluster |
+## Where state lives
 
-See [Clusters and schedulers](schedulers.md) for construction examples.
+The scheduler owns queue and accounting records. For local Shell jobs, target
+launch and exit receipts provide execution evidence. The registry stores cluster
+definitions; it does not copy job history into a database.
 
-## A job has three public views
+A reference includes the native ID and its incarnation. Keep the whole reference:
+a bare Slurm or PBS number is insufficient to identify a molq job safely.
 
-### JobHandle
+## Connecting
 
-Returned by `submit_job()`. It is a convenience object for the active
-lifecycle:
+`Molq()` starts a temporary service over stdio. A shared `molq serve` endpoint lets
+the CLI, SDKs, and watcher use the same observations and event cursors. Each
+independent service has its own cache and cursors.
 
-```python
-job.status()
-job.refresh()
-job.wait(timeout=3600)
-job.cancel()
-```
-
-### JobRecord
-
-An immutable snapshot stored by molq. It includes the molq job ID, scheduler
-ID, state, timestamps, exit information, command metadata, and artifact paths.
-Use `queue.get_job()` and `queue.list_jobs()` to read records.
-
-### QueueEntry
-
-One row from the scheduler's live queue:
-
-```python
-entries = cluster.get_queue()
-```
-
-`QueueEntry` and `JobRecord` answer different questions:
-
-| View | Source | What it represents |
-|---|---|---|
-| `JobRecord` | molq SQLite database | Jobs molq knows about, including history |
-| `QueueEntry` | `squeue`, `qstat`, or `bjobs` | What the scheduler reports right now |
-
-## Lifecycle
-
-A normal job moves through:
-
-```text
-created → submitted → queued → running → succeeded
-                                      └→ failed
-```
-
-Cancellation, timeout, or disappearing scheduler state can instead produce
-`cancelled`, `timed_out`, or `lost`. All five final states are terminal.
-
-molq stores transitions; it does not infer the current state merely from an
-in-memory object. Reconciliation updates the durable record from scheduler
-responses.
-
-## Rules of thumb
-
-- Put destination details on `Cluster`.
-- Put resource defaults, retry, and retention on `Submitor`.
-- Put one job's requirements in `JobResources`, `JobScheduling`, and
-  `JobExecution`.
-- Use `JobRecord` for application logic and audit history.
-- Use `cluster.get_queue()` only when you need the scheduler's live view.
-- Keep cluster names stable whenever you want CLI and API sessions to find the
-  same records.
+Both connections use the same public API. See [configuration](configuration.md)
+for a shared service and [monitoring](monitoring.md) for status freshness.

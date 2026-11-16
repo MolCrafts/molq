@@ -1,0 +1,1996 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://molcrafts.org/molq/protocol",
+  "$defs": {
+    "Command": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "argv"
+            },
+            "argv": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 4096
+              },
+              "minItems": 1,
+              "maxItems": 4096
+            }
+          },
+          "required": [
+            "kind",
+            "argv"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "shell"
+            },
+            "command": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          "required": [
+            "kind",
+            "command"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "script"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 524288
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Accelerator": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "gpu",
+            "nvidia_mps"
+          ]
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "scope": {
+          "enum": [
+            "per_node",
+            "total"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        }
+      },
+      "required": [
+        "kind",
+        "quantity",
+        "scope"
+      ],
+      "additionalProperties": false
+    },
+    "Resources": {
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "tasks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "cpus_per_task": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "memory_bytes": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "description": "Minimum memory per allocated node, decimal bytes; Scheduler rounds upward to its native granularity."
+        },
+        "time_limit_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "accelerators": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Accelerator"
+          },
+          "maxItems": 16
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "FileLocation": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "JobRef": {
+      "type": "object",
+      "properties": {
+        "registry_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "cluster_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "native_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.;-]{0,255}$"
+        },
+        "incarnation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        }
+      },
+      "required": [
+        "registry_id",
+        "cluster_id",
+        "native_id",
+        "incarnation"
+      ],
+      "additionalProperties": false
+    },
+    "Dependency": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/JobRef"
+        },
+        "condition": {
+          "enum": [
+            "after",
+            "after_success",
+            "after_failure",
+            "after_started"
+          ]
+        }
+      },
+      "required": [
+        "ref",
+        "condition"
+      ],
+      "additionalProperties": false
+    },
+    "JobArray": {
+      "type": "object",
+      "properties": {
+        "indices": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "max_concurrent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        }
+      },
+      "required": [
+        "indices"
+      ],
+      "additionalProperties": false
+    },
+    "Scheduling": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "comment": {
+          "type": "string",
+          "maxLength": 4094
+        },
+        "partition": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "account": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "qos": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "reservation": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "exclusive": {
+          "type": "boolean"
+        },
+        "array": {
+          "$ref": "#/$defs/JobArray"
+        },
+        "requeue": {
+          "type": "boolean"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Dependency"
+          },
+          "maxItems": 256
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "Launch": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "direct",
+            "mpi"
+          ]
+        },
+        "ranks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "threads": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "Placement": {
+      "type": "object",
+      "properties": {
+        "tasks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "cpus_per_task": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ExecutionUnit": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "command": {
+          "$ref": "#/$defs/Command"
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "stdout": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "stderr": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "launch": {
+          "$ref": "#/$defs/Launch"
+        },
+        "placement": {
+          "$ref": "#/$defs/Placement"
+        }
+      },
+      "required": [
+        "id",
+        "command"
+      ],
+      "additionalProperties": false
+    },
+    "Plan": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "unit"
+            },
+            "ref": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+            }
+          },
+          "required": [
+            "kind",
+            "ref"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "sequence",
+                "parallel"
+              ]
+            },
+            "children": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Plan"
+              },
+              "minItems": 1,
+              "maxItems": 256
+            }
+          },
+          "required": [
+            "kind",
+            "children"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Execution": {
+      "type": "object",
+      "properties": {
+        "units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExecutionUnit"
+          },
+          "minItems": 1,
+          "maxItems": 256
+        },
+        "plan": {
+          "$ref": "#/$defs/Plan"
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "units"
+      ],
+      "additionalProperties": false
+    },
+    "JobSpec": {
+      "type": "object",
+      "properties": {
+        "resources": {
+          "$ref": "#/$defs/Resources"
+        },
+        "scheduling": {
+          "$ref": "#/$defs/Scheduling"
+        },
+        "execution": {
+          "$ref": "#/$defs/Execution"
+        }
+      },
+      "required": [
+        "execution"
+      ],
+      "additionalProperties": false
+    },
+    "Defaults": {
+      "type": "object",
+      "properties": {
+        "resources": {
+          "$ref": "#/$defs/Resources"
+        },
+        "scheduling": {
+          "$ref": "#/$defs/SchedulingDefaults"
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "TransportDefinition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "local"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "ssh"
+            },
+            "alias": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+            }
+          },
+          "required": [
+            "kind",
+            "alias"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ClusterDefinition": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "scheduler": {
+          "enum": [
+            "shell",
+            "slurm",
+            "pbs",
+            "lsf"
+          ]
+        },
+        "transport": {
+          "$ref": "#/$defs/TransportDefinition"
+        },
+        "defaults": {
+          "$ref": "#/$defs/Defaults"
+        },
+        "launcher": {
+          "enum": [
+            "srun",
+            "mpirun",
+            "mpiexec"
+          ]
+        },
+        "pbs_dialect": {
+          "enum": [
+            "openpbs"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "scheduler"
+      ],
+      "additionalProperties": false
+    },
+    "SchedulingDefaults": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "comment": {
+          "type": "string",
+          "maxLength": 4094
+        },
+        "partition": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "account": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "qos": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "reservation": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "exclusive": {
+          "type": "boolean"
+        },
+        "requeue": {
+          "type": "boolean"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Dependency"
+          },
+          "maxItems": 256
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ErrorData": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "message": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "not_applied",
+            "applied",
+            "unknown"
+          ]
+        },
+        "context": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "message",
+        "outcome",
+        "context"
+      ],
+      "additionalProperties": false
+    },
+    "Freshness": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "live",
+            "cached",
+            "stale",
+            "unavailable"
+          ]
+        },
+        "age_seconds": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "status",
+        "age_seconds"
+      ],
+      "additionalProperties": false
+    },
+    "Completion": {
+      "type": "object",
+      "properties": {
+        "all_confirmed_terminal": {
+          "type": "boolean"
+        },
+        "successful": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "all_confirmed_terminal",
+        "successful"
+      ],
+      "additionalProperties": false
+    },
+    "JobSnapshot": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/JobRef"
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "timed_out",
+            "unknown"
+          ]
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "observed_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "freshness": {
+          "$ref": "#/$defs/Freshness"
+        },
+        "source": {
+          "enum": [
+            "queue",
+            "accounting",
+            "shell_receipt",
+            "absent",
+            "unavailable"
+          ]
+        },
+        "raw_state": {
+          "type": "string"
+        },
+        "native_diagnostic": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "failure_reason": {
+          "enum": [
+            "out_of_memory",
+            "node_failure",
+            "preempted",
+            "timeout",
+            "cancelled",
+            "boot_failure",
+            "deadline",
+            "failed"
+          ]
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "comment": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "submitted_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "$ref": "#/$defs/ErrorData"
+        },
+        "last_known": {
+          "$ref": "#/$defs/JobSnapshot"
+        }
+      },
+      "required": [
+        "ref",
+        "state",
+        "terminal",
+        "observed_at",
+        "freshness",
+        "source",
+        "raw_state",
+        "exit_code"
+      ],
+      "additionalProperties": false
+    },
+    "Coverage": {
+      "type": "object",
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ErrorData"
+          }
+        }
+      },
+      "required": [
+        "complete",
+        "errors"
+      ],
+      "additionalProperties": false
+    },
+    "ObservedChange": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "observed_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "ref": {
+          "$ref": "#/$defs/JobRef"
+        },
+        "previous_state": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "terminal": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cursor",
+        "observed_at",
+        "ref",
+        "previous_state",
+        "state",
+        "terminal"
+      ],
+      "additionalProperties": false
+    },
+    "ObservationResult": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "object",
+          "properties": {
+            "since": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "until": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "time_field": {
+              "const": "ended_at"
+            },
+            "account_scope": {
+              "const": "current_target_user"
+            },
+            "source": {
+              "const": "accounting"
+            },
+            "observed_at": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "freshness": {
+              "$ref": "#/$defs/Freshness"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "since",
+            "until",
+            "time_field",
+            "account_scope",
+            "source",
+            "observed_at",
+            "freshness",
+            "limit"
+          ],
+          "additionalProperties": false
+        },
+        "snapshots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JobSnapshot"
+          }
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "completion": {
+          "$ref": "#/$defs/Completion"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObservedChange"
+          }
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "resync": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "snapshots",
+        "coverage",
+        "completion"
+      ],
+      "additionalProperties": false
+    },
+    "ClusterRecord": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "scheduler": {
+          "enum": [
+            "shell",
+            "slurm",
+            "pbs",
+            "lsf"
+          ]
+        },
+        "transport": {
+          "$ref": "#/$defs/TransportDefinition"
+        },
+        "defaults": {
+          "$ref": "#/$defs/Defaults"
+        },
+        "launcher": {
+          "enum": [
+            "srun",
+            "mpirun",
+            "mpiexec"
+          ]
+        },
+        "pbs_dialect": {
+          "enum": [
+            "openpbs"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "name",
+        "scheduler",
+        "id",
+        "revision"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "methods": {
+    "molq.hello": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "schema.discover": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "clusters.list": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "clusters.get": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster"
+      ],
+      "additionalProperties": false
+    },
+    "clusters.register": {
+      "$ref": "#/$defs/ClusterDefinition"
+    },
+    "clusters.update": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "definition": {
+          "$ref": "#/$defs/ClusterDefinition"
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "cluster",
+        "definition",
+        "expected_revision"
+      ],
+      "additionalProperties": false
+    },
+    "clusters.remove": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "cluster",
+        "expected_revision"
+      ],
+      "additionalProperties": false
+    },
+    "jobs.validate": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "spec": {
+          "$ref": "#/$defs/JobSpec"
+        }
+      },
+      "required": [
+        "cluster",
+        "spec"
+      ],
+      "additionalProperties": false
+    },
+    "jobs.preview": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "spec": {
+          "$ref": "#/$defs/JobSpec"
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "project_scope": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster",
+        "spec",
+        "project_root"
+      ],
+      "additionalProperties": false
+    },
+    "jobs.submit": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "spec": {
+          "$ref": "#/$defs/JobSpec"
+        },
+        "request_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "project_scope": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster",
+        "spec",
+        "project_root"
+      ],
+      "additionalProperties": false
+    },
+    "jobs.get": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/JobRef"
+        },
+        "consistency": {
+          "enum": [
+            "live",
+            "bounded",
+            "cached"
+          ]
+        },
+        "max_age": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 86400
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false
+    },
+    "jobs.get_many": {
+      "type": "object",
+      "properties": {
+        "refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JobRef"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "consistency": {
+          "enum": [
+            "live",
+            "bounded",
+            "cached"
+          ]
+        },
+        "max_age": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 86400
+        }
+      },
+      "required": [
+        "refs"
+      ],
+      "additionalProperties": false
+    },
+    "jobs.observe": {
+      "type": "object",
+      "properties": {
+        "refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JobRef"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        },
+        "consistency": {
+          "enum": [
+            "live",
+            "bounded",
+            "cached"
+          ]
+        },
+        "max_age": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 86400
+        },
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "project_scope": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "jobs.list": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "project_scope": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled",
+              "timed_out",
+              "unknown"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster"
+      ],
+      "additionalProperties": false
+    },
+    "jobs.history": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "cluster": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/JobRef"
+              },
+              "minItems": 1,
+              "maxItems": 1024
+            }
+          },
+          "required": [
+            "cluster",
+            "refs"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cluster": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "since": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "until": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "states": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "succeeded",
+                  "failed",
+                  "cancelled",
+                  "timed_out"
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1024
+            }
+          },
+          "required": [
+            "cluster"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "jobs.cancel": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/JobRef"
+        },
+        "request_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false
+    },
+    "jobs.requeue": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/JobRef"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false
+    },
+    "jobs.cancel_many": {
+      "type": "object",
+      "properties": {
+        "refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JobRef"
+          },
+          "minItems": 1,
+          "maxItems": 1024
+        }
+      },
+      "required": [
+        "refs"
+      ],
+      "additionalProperties": false
+    },
+    "maintenance.inspect": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "after": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster"
+      ],
+      "additionalProperties": false
+    },
+    "maintenance.prune": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+          },
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "cluster",
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    "maintenance.prune_submissions": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "logs.read": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/JobRef"
+        },
+        "stream": {
+          "enum": [
+            "stdout",
+            "stderr"
+          ]
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 262144
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false
+    },
+    "files.transfer": {
+      "type": "object",
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileLocation"
+          },
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "destination": {
+          "$ref": "#/$defs/FileLocation"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^-"
+          },
+          "maxItems": 256
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        }
+      },
+      "required": [
+        "sources",
+        "destination"
+      ],
+      "additionalProperties": false
+    },
+    "files.stat": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "files.list": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "with_stat": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 512
+        },
+        "after": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "files.read": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 262144
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "files.write": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "data": {
+          "type": "string",
+          "maxLength": 349528
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster",
+        "path",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "files.mkdir": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "parents": {
+          "type": "boolean"
+        },
+        "exist_ok": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4095
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "files.remove": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "directory": {
+          "type": "boolean"
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "recursive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cluster",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "files.rename": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "target": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster",
+        "path",
+        "target"
+      ],
+      "additionalProperties": false
+    },
+    "files.touch": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "exist_ok": {
+          "type": "boolean"
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "config.reload": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "config.get": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    "config.set": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "value": {}
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "presets.list": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "presets.get": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    "presets.set": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "value": {
+          "$ref": "#/$defs/Defaults"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "events.subscribe": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "files.chmod": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "mode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4095
+        }
+      },
+      "required": [
+        "cluster",
+        "path",
+        "mode"
+      ],
+      "additionalProperties": false
+    },
+    "files.symlink": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "target": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster",
+        "path",
+        "target"
+      ],
+      "additionalProperties": false
+    },
+    "files.resolve": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "files.read_many": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "minItems": 1,
+          "maxItems": 128
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 262144
+        }
+      },
+      "required": [
+        "cluster",
+        "paths"
+      ],
+      "additionalProperties": false
+    },
+    "connections.authenticate": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "cluster",
+        "code"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "release": "0.9.0"
+}

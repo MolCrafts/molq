@@ -1,220 +1,93 @@
-# Monitor jobs
+# Follow jobs
 
-molq stores job history in SQLite and updates active records by reconciling
-them with the selected scheduler. You can observe that state through Python,
-the CLI, or the full-screen dashboard.
-
-## Persisted records versus the live queue
-
-These two views are intentionally different:
-
-| View | Source | Best for |
-|---|---|---|
-| `queue.list_jobs()` | molq's SQLite store | Your submissions, attempts, transitions, and history |
-| `cluster.get_queue()` | `squeue`, `qstat`, or `bjobs` | The scheduler's current queue |
+Read one job or query saved references together:
 
 ```python
-records = queue.list_jobs(include_terminal=True)
-entries = cluster.get_queue()
+import json
+
+result = job.status()
+print(json.dumps(result["snapshots"][0]["state"], ensure_ascii=False))
+result = mq.jobs([item.ref for item in jobs]).status()
 ```
 
-A scheduler entry may have been submitted outside molq. A completed molq record
-may no longer appear in the scheduler queue.
+## Read a result
 
-## Follow one job
+| Field | Meaning |
+|---|---|
+| `snapshots` | State and evidence for each allocation |
+| `coverage.complete` | Whether the requested scope was fully observed |
+| `completion.all_confirmed_terminal` | Whether every allocation has confirmed terminal evidence |
+| `completion.successful` | `true` for confirmed success, `false` for confirmed failure, otherwise `null` |
 
-`JobHandle.status()` reads cached state. Call `refresh()` for scheduler I/O or
-`wait()` to reconcile until the job is terminal.
+States are `queued`, `running`, `succeeded`, `failed`, `cancelled`, `timed_out`,
+and `unknown`. Queue absence alone does not confirm completion. Inspect coverage
+and freshness before treating a result as complete.
+
+Choose freshness with `job.status(consistency=...)`:
+
+| Mode | Behavior |
+|---|---|
+| `live` | Query the target now; the default |
+| `bounded` | Reuse observations no older than `max_age` seconds |
+| `cached` | Read available cached evidence without a native query |
+
+Cached snapshots include their age. A failed sample does not turn a job into a
+failed or terminal allocation.
+
+## Wait and cancel
 
 ```python
-job = queue.submit_job(argv=["python", "train.py"])
+import json
 
-print(job.status())
-job.refresh()
-
-record = job.wait(timeout=3600)
-print(record.state.value, record.exit_code)
+result = job.wait(timeout=600, interval=2)
+if result["completion"]["successful"]:
+    print(json.dumps(job.logs(), ensure_ascii=False))
 ```
 
-A timeout raises `MolqTimeoutError`; it does not cancel the job.
+Python wait durations are seconds. Waiting ends when all references have confirmed
+terminal evidence; check `successful` separately. A wait timeout or client exit
+leaves the job running. Cancellation acceptance also needs a later status query
+to confirm its final state.
 
-## Wait for several jobs
+## Queue and history
 
 ```python
-jobs = [
-    queue.submit_job(argv=["python", "task.py", str(i)])
-    for i in range(4)
-]
+from molq import submit
 
-records = queue.watch_jobs(
-    [job.job_id for job in jobs],
-    timeout=7200,
-)
+hpc = submit("hpc")
+queue = hpc.list(states=["running"], name="simulation")
+
+# Slurm: terminal records for the target login user, including non-molq jobs.
+history = hpc.history(states=["failed"], limit=100)
+
+# All schedulers: retained evidence for specific saved references.
+records = hpc.history(refs=[job.ref])
 ```
 
-Pass no IDs to `watch_jobs()` to wait for every active job in the current
-cluster namespace. Either way it returns records only for the jobs it waited
-on — with no IDs, the set that was active when the call started, not the
-cluster's whole history.
+Range discovery is available on Slurm in 0.9.0. The default window is the last
+24 hours. Set `since` and `until` to RFC3339 timestamps with a timezone; results
+filter completion time in `[since, until)`. Limits are 1–1024, default 100.
+Ref mode cannot be combined with range filters.
 
-## Job states
+History retention belongs to the scheduler. If coverage is incomplete, narrow
+the window or inspect its errors. An empty result does not prove that no older
+job failed.
 
-```text
-created → submitted → queued → running → succeeded
-                                      ├→ failed
-                                      ├→ cancelled
-                                      ├→ timed_out
-                                      └→ lost
-```
-
-Use `record.state.is_terminal` instead of maintaining your own set of final
-states.
-
-## Refresh explicitly
-
-Long-lived services can decide when scheduler I/O occurs:
+## Changes and events
 
 ```python
-queue.refresh_jobs()
-active = queue.list_jobs()
+import json
+
+first = hpc.observe()
+next_sample = hpc.observe(cursor=first["cursor"])
+print(json.dumps(next_sample["changes"], ensure_ascii=False))
 ```
 
-One reconciliation pass:
+The first sample establishes a baseline. An expired cursor or service restart
+returns `resync` and a new baseline, without inventing completion events.
+Use history explicitly to inspect earlier completions.
 
-1. loads active records for this cluster name;
-2. batch-queries the scheduler;
-3. stores changed state and timestamps;
-4. emits lifecycle events;
-5. schedules retries when policy allows.
-
-## Read logs
-
-Default stdout and stderr live below the job's resolved working directory:
-
-```text
-<cwd>/.molq/jobs/<job-id>/
-```
-
-The exact paths are recorded in metadata:
-
-```python
-record = queue.get_job(job.job_id)
-print(record.metadata["molq.stdout_path"])
-print(record.metadata["molq.stderr_path"])
-```
-
-Those paths are on the *cluster's* filesystem. `molq logs` reads them through
-the destination's transport, so the same commands work whether the job ran
-here or on a remote cluster:
-
-```bash
-molq logs JOB_ID local --cluster laptop
-molq logs JOB_ID slurm --cluster dardel --stream stderr --tail 50
-molq logs JOB_ID slurm --cluster dardel --follow
-```
-
-`--tail` is evaluated on the far side, so a multi-gigabyte log does not cross
-the network to show you fifty lines.
-
-To keep a copy locally rather than just read it, download through the
-transport:
-
-```python
-paths = queue.fetch_logs(
-    job.job_id,
-    dest_dir="./downloaded-logs",
-)
-print(paths["stdout"])
-```
-
-Copy the complete job directory when the workload writes additional outputs:
-
-```python
-directory = queue.fetch_artifacts(
-    job.job_id,
-    dest_dir="./downloaded-run",
-    exclude=("*.tmp",),
-)
-```
-
-## Inspect history
-
-```python
-record = queue.get_job(job_id)
-timeline = queue.get_transitions(job_id)
-attempts = queue.get_retry_family(job_id)
-parents = queue.get_dependencies(job_id)
-children = queue.get_dependents(job_id)
-```
-
-The CLI combines those views:
-
-```bash
-molq history slurm --cluster dardel --all
-molq inspect JOB_ID slurm --cluster dardel
-```
-
-## Run reconciliation in the background
-
-For a long-running process:
-
-```python
-queue.run_daemon(
-    interval=5.0,
-    run_cleanup=True,
-)
-```
-
-Or run one pass from the CLI:
-
-```bash
-molq daemon slurm --cluster dardel --once
-```
-
-The daemon performs reconciliation and optional retention cleanup. It is not
-required when application code already calls `wait()`, `refresh_jobs()`, or
-CLI commands regularly.
-
-## Open the dashboard
-
-```bash
-molq monitor
-molq monitor --all --limit 500 --refresh 1.5
-```
-
-The dashboard reads persisted jobs across cluster namespaces. Closing it does
-not cancel anything.
-
-## Subscribe to lifecycle events
-
-Handlers run synchronously in registration order. Exceptions are logged and
-isolated from the monitoring loop.
-
-```python
-from molq import EventType
-
-
-def report(payload):
-    print(payload.job_id, payload.record.state.value)
-
-
-queue.on_event(EventType.JOB_COMPLETED, report)
-queue.on_event(EventType.JOB_FAILED, report)
-
-# Later
-queue.off_event(EventType.JOB_COMPLETED, report)
-```
-
-## Clean up retained data
-
-Preview cleanup first:
-
-```python
-plan = queue.cleanup_jobs(dry_run=True)
-print(plan["job_dirs"])
-print(plan["records"])
-```
-
-The default retention keeps job directories for 30 days, terminal records for
-90 days, and failed-job directories. Override it with `RetentionPolicy` or a
-[configuration profile](configuration.md).
+For continuous output and notifications, use [molq watch](plugins.md). Share one
+[service endpoint](configuration.md#shared-service) when clients need the same
+cache and cursors. Event subscriptions passively deliver changes already observed;
+a watcher or other client must perform the observations.
