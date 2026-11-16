@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Wheels are tagged `py3-none-<platform>` and published for Linux (glibc and
+musl), macOS 12+, and Windows on x86_64 and arm64, so any Python 3.12+ installs
+the compiled service without Go.
+
 The CLI names the object. Destinations are `molq cluster list|get|register|update|remove`. Allocations are `molq job list|submit|preview|status|cancel|requeue|logs|wait|history|observe`. `molq list`, `molq clusters`, and the old top-level job verbs are rejected with the replacement usage. On a terminal, the two list commands print a table; a pipe, a redirect, or `--json` keeps the JSON object. `--help` is text.
 
 CLI argv submissions accept partition, account, and CPU resource flags.

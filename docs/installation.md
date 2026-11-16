@@ -7,8 +7,10 @@ pip install molcrafts-molq
 molq --version
 ```
 
-The package includes the `molq` command and the compiled service. Source installs
-require Go; the compiler version is listed in `go.mod`.
+The package includes the `molq` command and the compiled service. Wheels exist
+for Linux (glibc or musl) and Windows on x86_64 and arm64, and for macOS 12 or
+later on Intel and Apple silicon. Other platforms install from source, which
+requires Go; the compiler version is listed in `go.mod`.
 
 ## On your machine
 
