@@ -31,14 +31,13 @@ jobs:
     name: test / Manual
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v6
       - run: uv sync --extra docs
       - run: uv run --extra docs zensical build --strict
 
@@ -49,19 +48,18 @@ jobs:
     name: test / Contract, lint and types
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
+
+      - uses: MolCrafts/molcrafts-ci/actions/setup-node@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
-          node-version: "22"
-      - uses: astral-sh/setup-uv@v6
+          working-directory: sdk/typescript
       - run: uv sync --extra dev
-      - run: npm --prefix sdk/typescript ci
       - run: uv run python tools/check_generated.py
       - run: |
           uv run ruff check src tests tools examples
@@ -78,8 +76,8 @@ jobs:
       matrix:
         os: ${{ fromJSON(needs.context.outputs.tier == 'full' && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
       - run: go test ./...
@@ -100,21 +98,20 @@ jobs:
         os: ${{ fromJSON(needs.context.outputs.tier == 'full' && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
         python: ${{ fromJSON(needs.context.outputs.tier == 'full' && '["3.12", "3.13"]' || '["3.12"]') }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: ${{ matrix.python }}
-      - uses: astral-sh/setup-uv@v6
       - name: Build the current platform serve executable
         run: |
           mkdir -p src/molq/_bin
           go build -o src/molq/_bin/molq ./cmd/molq
       - run: uv sync --extra dev
       - run: uv run pytest -q --cov=molq --cov-report=xml
-      - uses: codecov/codecov-action@v4
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -128,14 +125,13 @@ jobs:
     name: test / Windows remote control plane
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v6
       - name: Compile the Windows serve executable and tests
         run: |
           New-Item -ItemType Directory -Force src/molq/_bin | Out-Null
@@ -151,23 +147,22 @@ jobs:
     name: test / Native TypeScript peer
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
+
+      - uses: MolCrafts/molcrafts-ci/actions/setup-node@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
-          node-version: "22"
-      - uses: astral-sh/setup-uv@v6
+          working-directory: sdk/typescript
       - name: Build the current platform serve executable
         run: |
           mkdir -p src/molq/_bin
           go build -o src/molq/_bin/molq ./cmd/molq
       - run: uv sync --extra dev
-      - run: npm --prefix sdk/typescript ci
       - run: npm --prefix sdk/typescript test
         env:
           MOLQ_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
@@ -181,19 +176,20 @@ jobs:
     name: test / Installed artifact
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: "3.12"
       - run: python -m pip install build twine
-      - run: python -m build
+      - name: Cross-build and verify every release wheel
+        run: python tools/build_wheels.py --sdist
       - run: python -m twine check --strict dist/*
       - run: |
           python -m venv /tmp/molq-wheel
-          /tmp/molq-wheel/bin/pip install dist/*.whl
+          /tmp/molq-wheel/bin/pip install dist/*-manylinux2014_x86_64.*.whl
       - name: Check wheel outside checkout
         working-directory: /tmp
         run: /tmp/molq-wheel/bin/python "${{ github.workspace }}/tools/check_wheel.py"
@@ -211,7 +207,7 @@ jobs:
     permissions:
       contents: read
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
     - uses: MolCrafts/molcrafts-ci/actions/check-workflows@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
 
   result:
