@@ -10,7 +10,7 @@ Install molq so its executable is on your PATH. Then:
 ```typescript
 import {submit, JobSpec} from "@molcrafts/molq";
 
-const local = await submit("dev", "local");
+const local = await submit("dev", "local", {projectRoot: "/absolute/project"});
 
 const hello = local(function* (name: string) {
   const job = yield JobSpec.argv(["echo", `hello ${name}`]);
@@ -29,9 +29,9 @@ try {
 `local(function* (...) {...})` decorates a top-level function. TypeScript's `@`
 syntax applies to class members, so top-level functions use this form.
 
-`submit("dev", "local")` binds a local destination. Jobs run in
-`~/.molcrafts/molq/jobs` on the execution machine.
-Later scripts select it with `submit("dev")`. Explicit bindings must match the
+The decorator accepts the target directory as `projectRoot`. Jobs run in
+`<project_root>/.molq/jobs/<run_id>` by default.
+Later scripts select it with `submit("dev", {projectRoot: "/absolute/project"})`. Explicit bindings must match the
 existing destination. Node starts a temporary service when needed.
 
 Decoration preserves argument and return types and the function's `this`.
@@ -42,6 +42,7 @@ submitting; failures propagate without automatic resend.
 
 ```typescript
 const hpc = await submit("hpc", "slurm", {
+  projectRoot: "/shared/project",
   transport: {kind: "ssh", alias: "research"},
   launcher: "srun",
   defaults: {
@@ -52,7 +53,7 @@ const hpc = await submit("hpc", "slurm", {
 ```
 
 Choose your site's alias, root and account. Register once, then use
-`submit("hpc")`. SSH destinations follow your OpenSSH configuration.
+`submit("hpc", {projectRoot: "/shared/project"})`. SSH destinations follow your OpenSSH configuration.
 
 ## Connection settings
 
@@ -60,6 +61,7 @@ Choose a separate registry or configuration file for Node:
 
 ```typescript
 const local = await submit("dev", "local", {
+  projectRoot: "/absolute/project",
   registry: "./registry.db",
   config: "./config.json",
 });
@@ -71,6 +73,7 @@ For a shared service or a browser application, pass its connection settings:
 import {submit, JobSpec} from "@molcrafts/molq";
 
 const hpc = await submit("hpc", {
+  projectRoot: "/shared/project",
   endpoint: "http://127.0.0.1:17891",
   token: "replace-with-your-own-token",
 });
@@ -101,12 +104,14 @@ execution plan, supply a full `JobSpec` object. Request fields use snake_case.
 | Object | Operations |
 |---|---|
 | Destination | Decorate a function; `submit`, `validate`, `preview`, `list`, `history`, `observe`, `definition`, `update`, `remove`, `close` |
-| `Job` | `status`, `wait`, `logs`, `cancel` |
+| `Job` | `status`, `wait`, `logs`, `cancel`, `requeue` |
 | `JobCollection` | `status`, `observe`, `wait`, `cancel` |
 | `Molq` | Registry, saved references, batches, direct RPC and connection lifetime |
 
 All durations, including wait, RPC timeout and status `maxAge`, are **seconds**. Save
-`job.ref` to return later. Closing a connection leaves accepted jobs running.
+`job.ref` to return later. Array submissions return a `JobCollection` with
+`refs` for its elements. Closing a connection leaves accepted jobs running.
 
 `MolqError` carries structured error data. An unknown mutation outcome must be
-reconciled before another submission.
+reconciled before another submission. Repeat the original request with its
+supplied request key to reconcile across serve restarts.

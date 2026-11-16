@@ -101,7 +101,7 @@ func TestShellWatchOnceIgnoresUnsupportedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	err = Run(context.Background(), publicWire(t, service), Options{Once: true, Clusters: []string{"local"}, Out: &out})
+	err = Run(context.Background(), publicWire(t, service), Options{Once: true, Clusters: []string{"local"}, ProjectRoot: filepath.ToSlash(root), Out: &out})
 	if err != nil {
 		t.Fatal(err)
 	}

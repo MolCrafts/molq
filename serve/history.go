@@ -149,8 +149,12 @@ func completing(job scheduler.Job) bool {
 	if raw == "" {
 		return false
 	}
-	token := strings.TrimRight(strings.Fields(raw)[0], "+")
-	return token == "COMPLETING"
+	for _, flag := range strings.Split(raw, ",") {
+		if fields := strings.Fields(flag); len(fields) != 0 && strings.TrimRight(fields[0], "+") == "COMPLETING" {
+			return true
+		}
+	}
+	return false
 }
 
 func contains(values []any, want any) bool {

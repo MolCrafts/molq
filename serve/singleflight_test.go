@@ -20,7 +20,7 @@ type sharedScheduler struct {
 	err       error
 }
 
-func (s *sharedScheduler) QueryMany(ctx context.Context, ids []string) (map[string]scheduler.Job, error) {
+func (s *sharedScheduler) QueryMany(ctx context.Context, ids []string, _ string) (map[string]scheduler.Job, error) {
 	s.calls.Add(1)
 	s.started <- ids
 	select {

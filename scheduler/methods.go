@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"path"
 	"time"
 
 	"github.com/MolCrafts/molq/protocol"
@@ -38,6 +37,10 @@ func withCommand(item *protocol.Error, command string) *protocol.Error {
 }
 
 func (c *core) native(ctx context.Context, argv []string, mutation bool, input []byte, hasInput bool) (string, error) {
+	return c.nativeWithLabel(ctx, argv, argv[0], mutation, input, hasInput)
+}
+
+func (c *core) nativeWithLabel(ctx context.Context, argv []string, command string, mutation bool, input []byte, hasInput bool) (string, error) {
 	result, err := c.transport.Run(ctx, argv, 30*time.Second, input, hasInput)
 	if err != nil {
 		item, ok := err.(*protocol.Error)
@@ -51,16 +54,16 @@ func (c *core) native(ctx context.Context, argv []string, mutation bool, input [
 		// Authentication never ran the scheduler command. A dropped connection
 		// after dispatch still leaves a mutation outcome unknown.
 		if mutation && dispatched && item.Kind != "AUTH_REQUIRED" && item.Kind != "PERMISSION_DENIED" {
-			extra := map[string]any{"command": argv[0]}
+			extra := map[string]any{"command": command}
 			if diagnostic, ok := item.Context["diagnostic"]; ok {
 				extra["diagnostic"] = diagnostic
 			}
 			return "", protocol.FailOutcome("OUTCOME_UNKNOWN", "Native mutation outcome is unknown", "unknown", extra)
 		}
 		if explainedTransport(item.Kind) {
-			return "", withCommand(item, argv[0])
+			return "", withCommand(item, command)
 		}
-		extra := map[string]any{"command": argv[0], "cause": item.Kind, "detail": item.Message}
+		extra := map[string]any{"command": command, "cause": item.Kind, "detail": item.Message}
 		if diagnostic, ok := item.Context["diagnostic"]; ok {
 			extra["diagnostic"] = diagnostic
 		}
@@ -80,26 +83,22 @@ func (c *core) native(ctx context.Context, argv []string, mutation bool, input [
 			stderr = stderr[:4096]
 		}
 		return "", protocol.FailOutcome(kind, "Native scheduler command failed", outcome, map[string]any{
-			"command": argv[0], "returncode": result.ReturnCode, "stderr": string(stderr),
+			"command": command, "returncode": result.ReturnCode, "stderr": string(stderr),
 		})
 	}
 	return result.Text(), nil
 }
 
-func (c *core) stage(ctx context.Context, spec map[string]any, directory string, validate func(map[string]any) error, render func(map[string]any, string) (string, error)) (string, error) {
-	if err := validate(spec); err != nil {
-		return "", err
-	}
-	script, err := render(spec, directory)
-	if err != nil {
-		return "", err
-	}
-	target := path.Join(directory, "job.sh")
-	if err := c.transport.Write(ctx, target, []byte(script), nil); err != nil {
-		return "", err
-	}
-	return target, nil
+func (c *core) Requeue(context.Context, Job) error {
+	return unsupported("This scheduler does not support native requeue")
 }
+
+// stageScript receives a complete script before the target can submit it.
+const stageScript = `umask 077
+script=$(mktemp "${TMPDIR:-/tmp}/molq-script.XXXXXXXX") || exit 1
+trap 'rm -f -- "$script"' EXIT
+cat > "$script" && [ "$(wc -c < "$script" | tr -d '[:space:]')" = "$1" ] || exit 1
+`
 
 func (c *core) launch(unit map[string]any, payload string) (string, error) {
 	intent := mapAny(unit["launch"])
@@ -125,6 +124,12 @@ func (c *core) launch(unit map[string]any, payload string) (string, error) {
 }
 
 func (c *core) validate(spec map[string]any) error {
+	if mapAny(spec["scheduling"])["requeue"] != nil {
+		return unsupported("This scheduler cannot represent native requeue policy")
+	}
+	if mapAny(spec["scheduling"])["array"] != nil {
+		return unsupported("This scheduler cannot represent native job arrays")
+	}
 	units, _ := mapAny(spec["execution"])["units"].([]any)
 	for _, item := range units {
 		if _, err := c.launch(mapAny(item), "true"); err != nil {
@@ -134,10 +139,10 @@ func (c *core) validate(spec map[string]any) error {
 	return nil
 }
 
-func (c *core) accepted(ctx context.Context, query func(context.Context, []string) (map[string]Job, error), identity string) (Job, error) {
+func (c *core) accepted(ctx context.Context, query func(context.Context, []string, string) (map[string]Job, error), identity string) (Job, error) {
 	var last error
 	for range 4 {
-		jobs, err := query(ctx, []string{identity})
+		jobs, err := query(ctx, []string{identity}, "")
 		if err != nil {
 			return Job{}, protocol.FailOutcome("OUTCOME_UNKNOWN", "Allocation accepted but native identity lookup failed", "unknown", map[string]any{"native_id": identity})
 		}

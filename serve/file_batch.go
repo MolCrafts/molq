@@ -32,7 +32,8 @@ for group in parents hidden normal; do
   elif [ "$link" = 1 ]; then kind=missing; fi
   if [ -n "$root" ] && ! resolve "$PWD/$f" "$root" >/dev/null; then kind=missing;
   elif [ "$withstat" = 1 ] && [ -e "$f" ]; then
-    mtime=$(date -r "$f" +%s) || exit 1
+    # uutils date parses an operand like -dash as an option; ./ keeps it a file.
+    mtime=$(date -r "./$f" +%s) || exit 1
     set -- $(LC_ALL=C ls -ldnL -- "$f"); size=$5
   fi
   printf '%s %s %s %s %s\000' "$kind" "$link" "$size" "$mtime" "$f"

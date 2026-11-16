@@ -28,9 +28,9 @@ The same connection applies to diagnostics, generic RPC, and `watch`.
 ## Jobs
 
 ```sh
-molq job submit local -- echo hello
-molq job submit hpc --spec @job.json
-molq transfer -a --delete --exclude build/ ./project/ hpc:/scratch/you/project/
+molq job submit local --project-root "$PWD" -- echo hello
+molq job submit hpc --project-root /shared/project --spec @job.json
+molq transfer -a --exclude build/ ./inputs/ hpc:/shared/project/inputs/
 molq job status --ref @ref.json
 molq job wait --ref @ref.json --timeout 600 --interval 2
 molq job logs --ref @ref.json --stream stderr --offset 0 --limit 65536
@@ -41,11 +41,29 @@ molq job cancel --ref @ref.json
 registered cluster the way rsync's `HOST:PATH` names a host; a plain path is
 local. See [Files and logs](remote-files.md#transfer-files).
 
-Use either `--spec` or argv after `--`. Simple argv submissions accept `--name`
-and `--comment` before `--`; with a spec, put them in `scheduling` instead.
-Use `--spec @-` to submit JSON from stdin or pass the JSON object inline.
-Comments require a scheduler mapping: Slurm and LSF support them; PBS and Shell
-reject them.
+Use either `--spec` or argv after `--`. In argv mode, use `--name`, `--comment`,
+`--partition`, and `--account` for scheduling. Use `--nodes`, `--tasks`,
+`--cpus-per-task`, `--memory-bytes` (decimal bytes per node), and
+`--time-limit-seconds` for resources. With a spec, include these in the
+`scheduling` and `resources` objects. `--spec @-` reads JSON from stdin.
+Slurm and LSF support comments. Each scheduler validates the representation.
+
+`job preview` takes the same project and specification or argv and returns
+the rendered script without submitting. In the commands below, set
+`CLUSTER`, `PROJECT`, `PARTITION`, `ACCOUNT`, and `SIF` explicitly. `PROJECT`
+and `SIF` are absolute paths on Arrhenius, visible from the compute node.
+
+```sh
+molq job preview "$CLUSTER" --project-root "$PROJECT" \
+  --partition "$PARTITION" --account "$ACCOUNT" \
+  --tasks 1 --cpus-per-task 1 --time-limit-seconds 120 -- \
+  apptainer exec --bind "$PROJECT:/work" --pwd /work -- "$SIF" /bin/sh inputs/run.sh
+```
+
+Use the same arguments with `job submit` when ready. Pass a
+`--request-key KEY` to reconcile that exact submission if the response is lost.
+See the [Arrhenius quick start](https://user.naiss.se/arrhenius_hpc/quickstart/)
+for site-specific scheduling and container requirements.
 
 `--ref` accepts a saved JobRef, not the complete submit response. The
 [quickstart](getting-started.md#command-line) shows how to extract it.
@@ -59,15 +77,16 @@ molq job history hpc --state failed --limit 100
 molq job history hpc --refs @refs.json
 molq job observe hpc
 molq watch --cluster hpc --interval 5
-molq job purge hpc
+molq job requeue --ref @ref.json
 ```
 
 `--state` is repeatable. Slurm range history accepts `--since` and `--until` as
 RFC3339 timestamps and filters completion time in `[since, until)`; the default
 window is 24 hours. `--refs` takes a JSON array and excludes range filters.
 See [monitoring](monitoring.md) for coverage and cursor semantics.
-`purge [CLUSTER]` deletes job directories older than `job_retention_days`; see
-[retention](configuration.md#job-directory-retention).
+For Shell, pass `--project-root PATH` to `job list`, `job observe`, and
+`watch`. See [legacy maintenance](configuration.md#layout-upgrade-and-legacy-maintenance)
+to inspect old archives.
 
 ## Destinations and diagnostics
 

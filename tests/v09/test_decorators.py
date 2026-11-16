@@ -23,7 +23,8 @@ from molq import (
 def test_cluster_generator_submits_real_jobs_and_preserves_return(tmp_path):
     mq = Molq(registry=tmp_path / "registry.db")
     try:
-        local = mq.clusters.register(name="local", scheduler="shell")
+        mq.clusters.register(name="local", scheduler="shell")
+        local = mq.cluster("local", project_root=tmp_path)
 
         @local
         def hello(name: str = "molq"):
@@ -56,7 +57,8 @@ def test_async_decorator_awaits_submission_through_generated_client(tmp_path):
     async def scenario():
         mq = AsyncMolq(registry=tmp_path / "registry.db")
         try:
-            local = await mq.clusters.register(name="local", scheduler="shell")
+            await mq.clusters.register(name="local", scheduler="shell")
+            local = mq.cluster("local", project_root=tmp_path)
 
             @local
             def hello(name):
@@ -94,7 +96,7 @@ def test_decoration_is_lazy_and_each_generator_call_uses_one_rpc(monkeypatch):
 
     monkeypatch.setattr(mq, "rpc", rpc)
 
-    @mq.cluster("registered")
+    @mq.cluster("registered", project_root="/project")
     def hello(name):
         job = yield JobSpec.argv(["echo", name])
         return job
@@ -259,6 +261,7 @@ def test_ordinary_function_preserves_old_return_without_rpc(monkeypatch):
 def test_old_submit_entry_registers_reuses_and_returns_jobs(tmp_path):
     settings = {
         "registry": tmp_path / "registry.db",
+        "project_root": tmp_path,
     }
     local = submit("dev", "local", **settings)
     try:
@@ -298,6 +301,7 @@ def test_async_submit_entry_has_the_same_generator_contract(tmp_path):
             "dev",
             "local",
             registry=tmp_path / "registry.db",
+            project_root=tmp_path,
         )
         try:
 
@@ -332,7 +336,7 @@ def test_submit_entry_selects_lazily_and_never_registers_unknown_names(monkeypat
 
     monkeypatch.setattr(Molq, "rpc", rpc)
     monkeypatch.setattr(Molq, "close", lambda self: closed.append(True))
-    destination = submit("unknown")
+    destination = submit("unknown", project_root="/project")
     assert calls == []
     try:
         with pytest.raises(MolqError, match="Unknown Cluster"):

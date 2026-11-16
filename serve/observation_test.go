@@ -18,12 +18,12 @@ type observationScheduler struct {
 	listed  bool
 }
 
-func (s *observationScheduler) QueryMany(context.Context, []string) (map[string]scheduler.Job, error) {
+func (s *observationScheduler) QueryMany(context.Context, []string, string) (map[string]scheduler.Job, error) {
 	s.queries++
 	return map[string]scheduler.Job{s.job.NativeID: s.job}, nil
 }
 
-func (s *observationScheduler) List(context.Context) ([]scheduler.Job, error) {
+func (s *observationScheduler) List(context.Context, string) ([]scheduler.Job, error) {
 	s.lists++
 	if !s.listed {
 		return []scheduler.Job{}, nil

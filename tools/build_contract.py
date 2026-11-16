@@ -81,6 +81,8 @@ defs = {
                 "pattern": "^[A-Za-z0-9][A-Za-z0-9_.;-]{0,255}$",
             },
             "incarnation": string,
+            "project_root": file_path,
+            "run_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
         },
         ["registry_id", "cluster_id", "native_id", "incarnation"],
     ),
@@ -93,6 +95,19 @@ defs = {
         },
         ["ref", "condition"],
     ),
+    "JobArray": obj(
+        {
+            "indices": {
+                "type": "array",
+                "items": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": True,
+            },
+            "max_concurrent": {"type": "integer", "minimum": 1, "maximum": 64},
+        },
+        ["indices"],
+    ),
     "Scheduling": obj(
         {
             "name": identifier,
@@ -103,6 +118,8 @@ defs = {
             "reservation": identifier,
             "priority": {"type": "integer", "minimum": 0, "maximum": 1000000},
             "exclusive": {"type": "boolean"},
+            "array": ref("JobArray"),
+            "requeue": {"type": "boolean"},
             "dependencies": {
                 "type": "array",
                 "items": ref("Dependency"),
@@ -170,7 +187,7 @@ defs = {
     "Defaults": obj(
         {
             "resources": ref("Resources"),
-            "scheduling": ref("Scheduling"),
+            "scheduling": ref("SchedulingDefaults"),
             "env": env,
             "cwd": string,
         }
@@ -193,6 +210,14 @@ defs = {
         ["name", "scheduler"],
     ),
 }
+defs["SchedulingDefaults"] = obj(
+    {
+        name: schema
+        for name, schema in defs["Scheduling"]["properties"].items()
+        if name != "array"
+    }
+)
+
 defs.update(
     {
         "ErrorData": obj(
@@ -245,6 +270,19 @@ defs.update(
                     ]
                 },
                 "raw_state": {"type": "string"},
+                "native_diagnostic": {"type": "object", "additionalProperties": True},
+                "failure_reason": {
+                    "enum": [
+                        "out_of_memory",
+                        "node_failure",
+                        "preempted",
+                        "timeout",
+                        "cancelled",
+                        "boot_failure",
+                        "deadline",
+                        "failed",
+                    ]
+                },
                 "exit_code": {"type": ["integer", "null"]},
                 **{
                     field: {"type": ["string", "null"]}
@@ -363,11 +401,23 @@ params = {
         {"cluster": string, "spec": ref("JobSpec")}, ["cluster", "spec"]
     ),
     "jobs.preview": obj(
-        {"cluster": string, "spec": ref("JobSpec")}, ["cluster", "spec"]
+        {
+            "cluster": string,
+            "spec": ref("JobSpec"),
+            "project_root": file_path,
+            "project_scope": file_path,
+        },
+        ["cluster", "spec", "project_root"],
     ),
     "jobs.submit": obj(
-        {"cluster": string, "spec": ref("JobSpec"), "request_key": identifier},
-        ["cluster", "spec"],
+        {
+            "cluster": string,
+            "spec": ref("JobSpec"),
+            "request_key": identifier,
+            "project_root": file_path,
+            "project_scope": file_path,
+        },
+        ["cluster", "spec", "project_root"],
     ),
     "jobs.get": obj(
         {
@@ -378,10 +428,20 @@ params = {
         ["ref"],
     ),
     "jobs.get_many": obj(query, ["refs"]),
-    "jobs.observe": obj({**query, "cluster": string, "cursor": string}),
+    "jobs.observe": obj(
+        {
+            **query,
+            "cluster": string,
+            "cursor": string,
+            "project_root": file_path,
+            "project_scope": file_path,
+        }
+    ),
     "jobs.list": obj(
         {
             "cluster": string,
+            "project_root": file_path,
+            "project_scope": file_path,
             "states": {
                 "type": "array",
                 "items": defs["JobSnapshot"]["properties"]["state"],
@@ -416,8 +476,23 @@ params = {
         ]
     },
     "jobs.cancel": obj({"ref": ref("JobRef"), "request_key": identifier}, ["ref"]),
+    "jobs.requeue": obj({"ref": ref("JobRef")}, ["ref"]),
     "jobs.cancel_many": obj({"refs": query["refs"]}, ["refs"]),
-    "jobs.purge": obj({"cluster": string}),
+    "maintenance.inspect": obj({"cluster": string, "after": file_path}, ["cluster"]),
+    "maintenance.prune": obj(
+        {
+            "cluster": string,
+            "entries": {
+                "type": "array",
+                "items": identifier,
+                "minItems": 1,
+                "maxItems": 128,
+                "uniqueItems": True,
+            },
+        },
+        ["cluster", "entries"],
+    ),
+    "maintenance.prune_submissions": obj({}),
     "logs.read": obj(
         {
             "ref": ref("JobRef"),

@@ -1,10 +1,14 @@
 # Files and logs
 
-Each submission gets one job directory, `~/.molcrafts/molq/jobs/<directory>/` under the execution machine's login home, holding the job script, stdout, stderr, and shell receipts. It is the job's default working directory. A transfer path is an absolute path on that cluster's filesystem. The SSH account's permissions are the boundary.
+Each submission writes default stdout and stderr beneath
+`<project_root>/.molq/jobs/<run_id>/` on the target. Shell writes its original
+launch and exit receipts there too. Slurm arrays use a separate subdirectory
+for each element. Log and receipt lifetime follows the project.
 
-On an SSH cluster that job directory exists only while the job runs. The first time serve observes a confirmed terminal state (a status query, `wait`, `watch` or `logs`), it moves the directory to the serve host with one rsync, at `collected/<cluster-id>/<directory>/` next to the registry (by default `~/.molcrafts/molq/collected/`), and removes it from the target. rsync deletes each remote file only after copying it, so an interrupted move keeps every file on one side and resumes at the next observation; a failure leaves the remote copy in place and is reported on serve's stderr. Logs of a collected job are read from the local copy. Files a job writes into its own job directory, which is its default working directory, move with it; anything that must stay on the cluster belongs in an explicit execution `cwd` elsewhere.
-
-Job directories on targets and in `collected/` are deleted, not archived, once unchanged for `job_retention_days` (30 by default); see [retention](configuration.md#job-directory-retention).
+The host can read ranges through `logs.read` or copy a full log with the
+existing rsync transfer. Use a [named artifact manifest](api.md#select-named-outputs-with-a-manifest)
+to download selected user outputs. Observing a completed job leaves all
+files on the target.
 
 ## Read job output
 
@@ -31,7 +35,7 @@ write `-a` and `--delete` yourself. A trailing slash means what it means to
 rsync.
 
 ```sh
-molq transfer -av --delete --exclude build/ ./project/ hpc:/scratch/you/project/
+molq transfer --transfer-deadline 600 -av --exclude build/ ./inputs/ hpc:/shared/project/inputs/
 molq transfer -a hpc:runs/run_01/out.xyz .
 ```
 
@@ -42,7 +46,10 @@ run copies between a local path and one SSH cluster, or within one host.
 Two distinct SSH clusters require explicit local staging, as with rsync.
 `-e`/`--rsh`, `--rsync-path`, `-M`/`--remote-option` and daemon options belong
 to the cluster transport and are rejected. The result carries rsync's stdout
-under `output`, bounded to 1 MiB, and the copy has a 90 second limit.
+under `output`, bounded to 1 MiB. `--transfer-deadline SECONDS` sets MolQ's
+total copy limit from 1 to 3600 seconds (default 90). rsync's own `--timeout`
+still controls its I/O timeout. In Python, set `timeout=` on the transfer and
+allow at least 15 extra seconds on `Molq(timeout=...)` for long transfers.
 
 A destination handle keeps the same copy:
 

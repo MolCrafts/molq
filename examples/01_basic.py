@@ -8,7 +8,7 @@ from molq import JobSpec, submit
 
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
-    local = submit("local", "local", registry=root / "registry.db")
+    local = submit("local", "local", registry=root / "registry.db", project_root=root)
 
     @local
     def hello(name):

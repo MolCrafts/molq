@@ -23,8 +23,8 @@ scheduler resources.
 | Clusters | `clusters.list`, `get`, `register`, `update`, `remove` |
 | Submission | `jobs.validate`, `preview`, `submit` |
 | State | `jobs.get`, `get_many`, `list`, `history`, `observe` |
-| Cancellation | `jobs.cancel`, `cancel_many` |
-| Retention | `jobs.purge` |
+| Native job control | `jobs.cancel`, `cancel_many`, `requeue` |
+| Legacy maintenance | `maintenance.inspect`, `maintenance.prune`, `maintenance.prune_submissions` |
 | Events | `events.subscribe` |
 | Files | `logs.read`, `files.transfer`, `stat`, `list`, `read`, `write`, `mkdir`, `remove`, `rename`, `touch` |
 | Settings | `config.get`, `set`, `reload` |
@@ -45,7 +45,7 @@ from molq import MolqError, submit
 
 hpc = submit("hpc")
 try:
-    job = hpc.submit(spec)
+    job = hpc.submit(spec, project_root="/shared/project")
 except MolqError as error:
     print(json.dumps(error.to_wire(), ensure_ascii=False))
 finally:

@@ -17,6 +17,7 @@ import (
 type Options struct {
 	Interval      time.Duration
 	Clusters      []string
+	ProjectRoot   string
 	NerveEndpoint string
 	Once          bool
 	Out           io.Writer
@@ -75,6 +76,9 @@ func Run(ctx context.Context, service Caller, options Options) error {
 		var firstError error
 		for _, name := range names {
 			params := map[string]any{"cluster": name}
+			if options.ProjectRoot != "" {
+				params["project_root"] = options.ProjectRoot
+			}
 			if cursor := cursors[name]; cursor != "" {
 				params["cursor"] = cursor
 			}

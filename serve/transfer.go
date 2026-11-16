@@ -118,6 +118,13 @@ func transferRoute(sources []location, destination location) (transport.Transpor
 	if sources[0].ssh() && destination.ssh() {
 		return nil, nil, nil, protocol.Fail("TRANSFER_UNSUPPORTED", "Two distinct SSH targets require explicit staging; no remote alias guessing", nil)
 	}
+	// Older rsync clients pass remote operands through the login shell.
+	// A scoped operand must not expand into paths the scope check never saw.
+	for _, item := range append(append([]location{}, sources...), destination) {
+		if item.ssh() && item.root != "" && strings.ContainsAny(item.path, " \t\r\n*?[]\\'\"$`;&|<>(){}!#~") {
+			return nil, nil, nil, protocol.Fail("INVALID_INPUT", "Scoped SSH transfer requires a literal shell-safe path", nil)
+		}
+	}
 	for _, source := range sources {
 		operands = append(operands, source.operand(source.ssh()))
 	}

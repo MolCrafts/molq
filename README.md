@@ -9,10 +9,11 @@ pip install molcrafts-molq
 
 ```python
 import json
+from pathlib import Path
 
 from molq import JobSpec, submit
 
-local = submit("local", "local")
+local = submit("local", "local", project_root=Path.cwd())
 
 
 @local
@@ -27,7 +28,7 @@ print(json.dumps(job.logs(), ensure_ascii=False))
 local.close()
 ```
 
-Bind once, then reuse `submit("local")` as a decorator. Each call submits
+Bind once, then reuse `submit("local", project_root=Path.cwd())` as a decorator. Each call submits
 a new allocation. Keep `job.ref` to query it later. Closing the client leaves accepted jobs running.
 
 The package includes the CLI and Go service. Python requires 3.12+; local

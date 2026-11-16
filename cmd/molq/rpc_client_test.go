@@ -36,7 +36,7 @@ func TestRPCWatchAndDiagnosticsUseExplicitEndpoint(t *testing.T) {
 	localRegistry := filepath.Join(root, "must-not-open.db")
 	for _, args := range [][]string{
 		{"rpc", "molq.hello"},
-		{"watch", "--once", "--cluster", "local"},
+		{"watch", "--once", "--cluster", "local", "--project-root", root},
 		{"ping"},
 	} {
 		args = append(args, "--endpoint", server.URL, "--token", token, "--registry", localRegistry)

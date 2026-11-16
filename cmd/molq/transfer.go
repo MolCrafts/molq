@@ -2,17 +2,18 @@ package main
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/MolCrafts/molq/protocol"
 )
 
-const transferUsage = "usage: molq transfer [RSYNC_OPTION...] SRC... DEST (SRC/DEST: CLUSTER:PATH or a local PATH)"
+const transferUsage = "usage: molq transfer [--transfer-deadline SECONDS] [RSYNC_OPTION...] SRC... DEST (SRC/DEST: CLUSTER:PATH or a local PATH)"
 
 // leadingGlobals takes the connection flags peelGlobals moved to the front and
 // leaves every remaining word to rsync untouched.
 func leadingGlobals(args []string) (map[string][]string, []string) {
-	globals := map[string]bool{"--registry": true, "--config": true, "--endpoint": true, "--token": true}
+	globals := map[string]bool{"--registry": true, "--config": true, "--endpoint": true, "--token": true, "--transfer-deadline": true}
 	flags := map[string][]string{}
 	for len(args) >= 2 && globals[args[0]] {
 		flags[args[0]] = append(flags[args[0]], args[1])
@@ -21,10 +22,24 @@ func leadingGlobals(args []string) (map[string][]string, []string) {
 	return flags, args
 }
 
-func transferCommand(client *caller, args []string) (any, error) {
+func transferDeadline(values []string) (int, error) {
+	if len(values) == 0 {
+		return 0, nil
+	}
+	seconds, err := strconv.Atoi(values[0])
+	if len(values) != 1 || err != nil || seconds < 1 || seconds > 3600 {
+		return 0, protocol.Fail("INVALID_INPUT", "--transfer-deadline requires one value from 1 to 3600 seconds", nil)
+	}
+	return seconds, nil
+}
+
+func transferCommand(client *caller, args []string, seconds int) (any, error) {
 	params, err := transferParams(args)
 	if err != nil {
 		return nil, err
+	}
+	if seconds != 0 {
+		params["timeout_seconds"] = seconds
 	}
 	return client.Call("files.transfer", params)
 }

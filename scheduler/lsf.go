@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -61,7 +62,7 @@ func (l *LSF) Render(spec map[string]any, directory string) (string, error) {
 	}
 	resources, scheduling := mapAny(spec["resources"]), mapAny(spec["scheduling"])
 	directives := []string{
-		"-cwd " + quote(directory), "-o " + quote(directory+"/stdout"), "-e " + quote(directory+"/stderr"),
+		"-cwd " + quote(directory), "-o " + quote(path.Join(directory, "stdout")), "-e " + quote(path.Join(directory, "stderr")),
 		"-n " + itoa(defaultInt(resources["tasks"], 1)), `-R "span[hosts=1]"`,
 	}
 	if seconds, ok := AsInt(resources["time_limit_seconds"]); ok {
@@ -96,7 +97,7 @@ func (l *LSF) Render(spec map[string]any, directory string) (string, error) {
 }
 
 func (l *LSF) Submit(ctx context.Context, spec map[string]any, directory string) (Job, error) {
-	if _, err := l.stage(ctx, spec, directory, l.Validate, l.Render); err != nil {
+	if err := l.prepareRun(ctx, directory, nil); err != nil {
 		return Job{}, err
 	}
 	script, err := l.Render(spec, directory)
@@ -118,7 +119,7 @@ func (l *LSF) Submit(ctx context.Context, spec map[string]any, directory string)
 	return l.accepted(ctx, l.QueryMany, match[1])
 }
 
-func (l *LSF) QueryMany(ctx context.Context, ids []string) (map[string]Job, error) {
+func (l *LSF) QueryMany(ctx context.Context, ids []string, _ string) (map[string]Job, error) {
 	if len(ids) == 0 {
 		return map[string]Job{}, nil
 	}
@@ -130,7 +131,7 @@ func (l *LSF) QueryMany(ctx context.Context, ids []string) (map[string]Job, erro
 	return parseLSF(text)
 }
 
-func (l *LSF) List(ctx context.Context) ([]Job, error) {
+func (l *LSF) List(ctx context.Context, _ string) ([]Job, error) {
 	text, err := l.native(ctx, []string{"bjobs", "-json", "-o", "jobid stat submit_time exec_cwd output_file error_file job_name job_description exit_code"}, false, nil, false)
 	if err != nil {
 		return nil, err
@@ -147,7 +148,7 @@ func (l *LSF) List(ctx context.Context) ([]Job, error) {
 }
 
 func (l *LSF) History(ctx context.Context, ids []string) (map[string]Job, error) {
-	return l.QueryMany(ctx, ids)
+	return l.QueryMany(ctx, ids, "")
 }
 
 func (l *LSF) HistoryRange(context.Context, time.Time, time.Time) ([]Job, error) {
@@ -199,7 +200,10 @@ func parseLSF(text string) (map[string]Job, error) {
 		workdir := stringField(row["EXEC_CWD"])
 		if workdir == "" || workdir == "-" {
 			if strings.HasPrefix(output, "/") {
-				workdir = output[:strings.LastIndex(output, "/")]
+				workdir = path.Dir(output)
+				if path.Base(workdir) == ".molq-control" {
+					workdir = path.Dir(workdir)
+				}
 			} else {
 				workdir = ""
 			}

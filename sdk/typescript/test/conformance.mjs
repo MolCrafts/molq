@@ -6,9 +6,6 @@ import {join,resolve} from 'node:path';
 import {StdioWire} from '../dist/node.js';
 import {Molq,methods,MolqError,HttpWire,submit as browserSubmit,JobSpec} from '../dist/index.js';
 
-// Job directories live under the target home; keep them out of the real one.
-process.env.HOME = await mkdtemp(join(tmpdir(), 'molq-ts-home-'));
-
 test('Native TS client uses the same Runtime and schema',async()=>{
   const temp=await mkdtemp(join(tmpdir(),'molq-ts-'));
   const python=process.env.MOLQ_TEST_PYTHON || resolve('../../.venv/bin/python');
@@ -16,10 +13,10 @@ test('Native TS client uses the same Runtime and schema',async()=>{
   try{
     const hello=await mq.connect();assert.equal(hello.release,'0.9.0');assert.deepEqual(hello.methods,methods);
     const destination=await mq.clusters.register({name:'local',scheduler:'shell'});
-    const job=await destination.submit(JobSpec.argv([python,'-c','print("typescript")']));
+    const job=await destination.submit(JobSpec.argv([python,'-c','print("typescript")']), {projectRoot: temp});
     const result=await job.wait(10,0.05);assert.equal(result.completion.successful,true);
     assert.match((await job.logs()).text,/typescript/);
-    await assert.rejects(()=>mq.cluster('missing').submit(JobSpec.argv(['true'])),error=>error instanceof MolqError && error.kind==='CLUSTER_NOT_FOUND');
+    await assert.rejects(()=>mq.cluster('missing').submit(JobSpec.argv(['true']), {projectRoot: temp}),error=>error instanceof MolqError && error.kind==='CLUSTER_NOT_FOUND');
   }finally{await mq.close();await rm(temp,{recursive:true,force:true});}
 });
 
@@ -68,7 +65,7 @@ test('HTTP peer shares Runtime semantics and structured authentication errors', 
     mq=new Molq(new HttpWire(endpoint,token));
     assert.equal((await mq.connect()).release,'0.9.0');
     const destination=await mq.clusters.register({name:'local',scheduler:'shell'});
-    const hpc=await browserSubmit('local',{endpoint,token});
+    const hpc=await browserSubmit('local',{endpoint,token,projectRoot:temp});
     let job;
     try {
       const hello=hpc(function* () { const submitted=yield JobSpec.argv([python,'-c','print("http-peer")']); return submitted; });

@@ -98,6 +98,7 @@ func runWatch(args []string) error {
 	endpoint := flags.String("endpoint", "", "explicit RPC endpoint")
 	token := flags.String("token", "", "RPC bearer token")
 	interval := flags.Float64("interval", 0, "seconds between observations")
+	projectRoot := flags.String("project-root", "", "target project directory for Shell observations")
 	once := flags.Bool("once", false, "observe once and exit")
 	var clusters stringsFlag
 	flags.Var(&clusters, "cluster", "cluster to observe")
@@ -111,7 +112,7 @@ func runWatch(args []string) error {
 	wire, err := newCaller(map[string][]string{
 		"--config": {*configPath}, "--registry": {*registryPath},
 		"--endpoint": {*endpoint}, "--token": {*token},
-	})
+	}, 0)
 	if err != nil {
 		return err
 	}
@@ -125,7 +126,7 @@ func runWatch(args []string) error {
 		every = time.Duration(*interval * float64(time.Second))
 	}
 	err = watch.Run(context.Background(), wire, watch.Options{
-		Interval: every, Clusters: names, NerveEndpoint: file.Client.Watch.NerveEndpoint,
+		Interval: every, Clusters: names, ProjectRoot: *projectRoot, NerveEndpoint: file.Client.Watch.NerveEndpoint,
 		Once: *once, Out: os.Stdout,
 	})
 	var reported *watch.ReportedError
@@ -157,7 +158,8 @@ func peelGlobals(args []string) []string {
 			positionals = append(positionals, args[i:]...)
 			break
 		}
-		if globals[args[i]] && i+1 < len(args) {
+		transferOption := args[i] == "--transfer-deadline" && len(positionals) > 0 && positionals[0] == "transfer"
+		if (globals[args[i]] || transferOption) && i+1 < len(args) {
 			flags = append(flags, args[i], args[i+1])
 			i++
 			continue
@@ -197,7 +199,7 @@ func callRPC(args []string) error {
 	if !ok {
 		return protocol.Fail("INVALID_INPUT", "Named RPC params must be an object", nil)
 	}
-	wire, err := newCaller(flags)
+	wire, err := newCaller(flags, 0)
 	if err != nil {
 		return err
 	}
@@ -276,7 +278,7 @@ func exitCode(kind string) int {
 		"SCHEDULER_UNSUPPORTED": 5, "TRANSFER_UNSUPPORTED": 5, "RESOURCE_REQUEST_INVALID": 5,
 		"EXECUTION_RESOURCE_CONFLICT": 5, "RPC_CHANNEL_UNSUPPORTED": 5,
 		"STATE_SCHEMA_INCOMPATIBLE": 5, "WAIT_TIMEOUT": 6,
-		"AUTH_REQUIRED": 7, "PERMISSION_DENIED": 7, "SUBMISSION_REJECTED": 7, "CANCEL_REJECTED": 7,
+		"AUTH_REQUIRED": 7, "PERMISSION_DENIED": 7, "SUBMISSION_REJECTED": 7, "CANCEL_REJECTED": 7, "REQUEUE_REJECTED": 7,
 		"PARTIAL_FAILURE": 8, "CONFLICT": 10, "STATE_BUSY": 10, "OUTCOME_UNKNOWN": 10,
 		"REGISTRY_MISMATCH": 10, "JOB_IDENTITY_MISMATCH": 10, "JOB_IDENTITY_UNVERIFIABLE": 10,
 	}

@@ -9,10 +9,11 @@ Register a local destination, then use it as a decorator:
 
 ```python
 import json
+from pathlib import Path
 
 from molq import JobSpec, submit
 
-local = submit("local", "local")
+local = submit("local", "local", project_root=Path.cwd())
 
 
 @local
@@ -37,7 +38,7 @@ The decorated function runs on your submission machine. Each `yield JobSpec` sub
 allocation to the destination and receives its `Job`; `return` sets the function's
 result. Calling `hello()` again submits another allocation.
 
-Later scripts use `local = submit("local")` with the same `@local` decorator.
+Later scripts use `local = submit("local", project_root=Path.cwd())` with the same `@local` decorator.
 `local.close()` releases the connection and leaves jobs running.
 
 Save a job's reference before closing if you want to return later:
@@ -51,8 +52,7 @@ Path("ref.json").write_text(json.dumps(job.ref))
 
 ## Command line
 
-Save this as `local.json`. Jobs run in `~/.molcrafts/molq/jobs` on the
-execution machine.
+Save this as `local.json`. Pass an existing execution-machine project directory on submission.
 
 ```json
 {
@@ -66,7 +66,7 @@ Register it and submit a command:
 
 ```sh
 molq cluster register --definition @local.json
-molq job submit local -- echo "hello molq" > submit.json
+molq job submit local --project-root "$PWD" -- echo "hello molq" > submit.json
 ```
 
 Extract the reference from the JSON response:

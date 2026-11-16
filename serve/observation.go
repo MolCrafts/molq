@@ -39,6 +39,12 @@ func Snapshot(ref map[string]any, job *scheduler.Job, failure map[string]any) ma
 		"name": name, "comment": comment, "submitted_at": submitted,
 		"started_at": started, "ended_at": ended,
 	}
+	if job != nil && len(job.NativeDiagnostic) > 0 {
+		result["native_diagnostic"] = job.NativeDiagnostic
+	}
+	if job != nil && job.FailureReason != "" && scheduler.Terminal(state) {
+		result["failure_reason"] = job.FailureReason
+	}
 	if failure != nil {
 		result["error"] = failure
 		result["freshness"] = map[string]any{"status": "unavailable", "age_seconds": 0}
@@ -89,7 +95,7 @@ func Collection(snapshots []map[string]any, failures []map[string]any) map[strin
 func RefKey(ref map[string]any) string {
 	return string(mustJSON([]string{
 		stringField(ref["registry_id"]), stringField(ref["cluster_id"]),
-		stringField(ref["native_id"]), stringField(ref["incarnation"]),
+		stringField(ref["native_id"]), stringField(ref["incarnation"]), stringField(ref["project_root"]), stringField(ref["run_id"]),
 	}))
 }
 

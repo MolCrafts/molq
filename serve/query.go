@@ -15,7 +15,8 @@ func (s *Service) many(ctx context.Context, refs []map[string]any, consistency s
 	}
 	found := map[string]map[string]any{}
 	var failures []map[string]any
-	groups := map[string][]map[string]any{}
+	type scope struct{ cluster, project string }
+	groups := map[scope][]map[string]any{}
 	var maxAge *time.Duration
 	if consistency == "bounded" {
 		age := s.cacheMaxAge(params)
@@ -37,16 +38,21 @@ func (s *Service) many(ctx context.Context, refs []map[string]any, consistency s
 			found[RefKey(ref)] = Snapshot(ref, nil, failure)
 			continue
 		}
-		id := stringField(ref["cluster_id"])
-		groups[id] = append(groups[id], ref)
+		key := scope{stringField(ref["cluster_id"]), stringField(ref["project_root"])}
+		groups[key] = append(groups[key], ref)
 	}
-	ids := make([]string, 0, len(groups))
+	ids := make([]scope, 0, len(groups))
 	for id := range groups {
 		ids = append(ids, id)
 	}
-	sort.Strings(ids)
+	sort.Slice(ids, func(i, j int) bool {
+		if ids[i].cluster == ids[j].cluster {
+			return ids[i].project < ids[j].project
+		}
+		return ids[i].cluster < ids[j].cluster
+	})
 	results := make([]map[string]any, len(ids))
-	runBatches(len(ids), func(i int) { results[i] = s.queryCluster(ctx, ids[i], groups[ids[i]]) })
+	runBatches(len(ids), func(i int) { results[i] = s.queryCluster(ctx, ids[i].cluster, groups[ids[i]]) })
 	for _, result := range results {
 		failures = append(failures, mapValue(result["coverage"])["errors"].([]map[string]any)...)
 		for _, value := range result["snapshots"].([]map[string]any) {
@@ -80,10 +86,9 @@ func (s *Service) queryCluster(ctx context.Context, id string, refs []map[string
 	}
 	values := make([]map[string]any, 0, len(refs))
 	var failures []map[string]any
-	var matched []scheduler.Job
 	for _, ref := range refs {
 		job, ok := jobs[stringField(ref["native_id"])]
-		if ok && job.Incarnation != ref["incarnation"] {
+		if ok && !matchesRef(job, ref) {
 			failure := protocol.Fail("JOB_IDENTITY_MISMATCH", "Native identity no longer matches", nil).Data()
 			failures = append(failures, failure)
 			values = append(values, Snapshot(ref, nil, failure))
@@ -92,17 +97,17 @@ func (s *Service) queryCluster(ctx context.Context, id string, refs []map[string
 		var observed *scheduler.Job
 		if ok {
 			observed = &job
-			matched = append(matched, job)
 		}
 		value := Snapshot(ref, observed, nil)
 		values = append(values, value)
+	}
+	for _, value := range values {
 		s.obs.Remember(value)
 	}
-	s.collectTerminal(ctx, cluster, matched)
 	return Collection(values, failures)
 }
 
-func (s *Service) listCluster(ctx context.Context, name string) (map[string]any, []map[string]any, error) {
+func (s *Service) listCluster(ctx context.Context, name, project, projectScope string) (map[string]any, []map[string]any, error) {
 	cluster, item, err := s.cluster(name)
 	if err != nil {
 		return nil, nil, err
@@ -112,13 +117,33 @@ func (s *Service) listCluster(ctx context.Context, name string) (map[string]any,
 	if err != nil {
 		return nil, nil, err
 	}
-	jobs, err := item.List(ctx)
+	if project == "" && projectScope != "" {
+		release()
+		return nil, nil, protocol.Fail("INVALID_INPUT", "project_scope requires project_root", nil)
+	}
+	if project != "" {
+		project, err = resolveProject(ctx, cluster, project, projectScope)
+		if err != nil {
+			release()
+			return nil, nil, err
+		}
+	}
+	jobs, err := item.List(ctx, project)
 	release()
 	if err != nil {
 		return nil, nil, err
 	}
 	values := make([]map[string]any, 0, len(jobs))
 	for _, job := range jobs {
+		if project != "" {
+			actual := job.ProjectRoot
+			if job.Workdir != nil && actual == "" {
+				actual, _ = scheduler.RunLocation(*job.Workdir)
+			}
+			if actual != project {
+				continue
+			}
+		}
 		if job.Incarnation == "" {
 			return nil, nil, protocol.Fail("JOB_IDENTITY_UNVERIFIABLE", "Queue entry lacks stable native submit identity", nil)
 		}
@@ -127,10 +152,11 @@ func (s *Service) listCluster(ctx context.Context, name string) (map[string]any,
 			return nil, nil, err
 		}
 		value := Snapshot(ref, &job, nil)
-		s.obs.Remember(value)
 		values = append(values, value)
 	}
-	s.collectTerminal(ctx, cluster, jobs)
+	for _, value := range values {
+		s.obs.Remember(value)
+	}
 	return cluster, values, nil
 }
 
@@ -149,14 +175,15 @@ func (s *Service) query(ctx context.Context, method string, params map[string]an
 		if err != nil {
 			return nil, err
 		}
-		defer release()
 		jobs, err := item.HistoryRange(ctx, since, until)
+		release()
 		if err != nil {
 			return nil, err
 		}
-		return historyResult(jobs, func(job scheduler.Job) (map[string]any, error) {
+		result := historyResult(jobs, func(job scheduler.Job) (map[string]any, error) {
 			return s.ref(cluster, job)
-		}, params, since, until), nil
+		}, params, since, until)
+		return result, nil
 	}
 	var refs []map[string]any
 	if raw, ok := params["refs"].([]any); ok {
@@ -172,9 +199,12 @@ func (s *Service) query(ctx context.Context, method string, params map[string]an
 			return nil, err
 		}
 	}
-	scope := mustJSON(map[string]any{"cluster": clusterID(cluster), "refs": refKeys(refs)})
+	scope := mustJSON(map[string]any{"cluster": clusterID(cluster), "refs": refKeys(refs), "project_root": params["project_root"], "project_scope": params["project_scope"]})
 	var result map[string]any
 	var err error
+	if refs != nil && (params["project_root"] != nil || params["project_scope"] != nil) {
+		return nil, protocol.Fail("INVALID_INPUT", "Explicit refs already select their projects", nil)
+	}
 	if refs == nil {
 		if cluster == nil {
 			return nil, protocol.Fail("INVALID_INPUT", "observe requires explicit refs or Cluster", nil)
@@ -197,7 +227,7 @@ func (s *Service) query(ctx context.Context, method string, params map[string]an
 }
 
 func (s *Service) observeCluster(ctx context.Context, cluster map[string]any, scope string, params map[string]any) (map[string]any, error) {
-	_, values, err := s.listCluster(ctx, stringField(cluster["id"]))
+	_, values, err := s.listCluster(ctx, stringField(cluster["id"]), stringField(params["project_root"]), stringField(params["project_scope"]))
 	if err != nil {
 		return nil, err
 	}

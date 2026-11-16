@@ -18,7 +18,7 @@ type blockingScheduler struct {
 	proceed <-chan struct{}
 }
 
-func (s *blockingScheduler) QueryMany(ctx context.Context, ids []string) (map[string]scheduler.Job, error) {
+func (s *blockingScheduler) QueryMany(ctx context.Context, ids []string, _ string) (map[string]scheduler.Job, error) {
 	s.started <- s.job.NativeID
 	select {
 	case <-s.proceed:
@@ -160,7 +160,7 @@ func TestQueuedCancellationIsNotApplied(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	done := make(chan error, 1)
-	go func() { _, err := service.cancelOne(ctx, refs[0]); done <- err }()
+	go func() { _, err := service.mutateJob(ctx, refs[0], false); done <- err }()
 	select {
 	case err := <-done:
 		failure, ok := err.(*protocol.Error)

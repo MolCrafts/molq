@@ -1,15 +1,16 @@
 /** Destination decorators over the public RPC client. */
-import { Cluster, Job, Molq, MolqError } from "./index.js";
+import { Cluster, type Job, type JobCollection, Molq, MolqError } from "./index.js";
 import type { ClusterDefinition, JobSpec } from "./types.js";
 export type SubmitOptions = Partial<Omit<ClusterDefinition, "name" | "scheduler">> & {
     endpoint?: string;
     token?: string;
     timeout?: number;
     registryId?: string;
+    projectRoot?: string;
 };
-/** Wrap a generator: each yielded JobSpec receives its submitted Job. */
+/** Wrap a generator: each yielded JobSpec receives a Job or JobCollection. */
 export type Destination = Cluster & {
-    <Args extends unknown[], Result>(builder: (...args: Args) => Generator<JobSpec, Result, Job>): (...args: Args) => Promise<Result>;
+    <Args extends unknown[], Result>(builder: (...args: Args) => Generator<JobSpec, Result, Job | JobCollection>): (...args: Args) => Promise<Result>;
     <Args extends unknown[], Result>(builder: (...args: Args) => Result): (...args: Args) => Promise<Awaited<Result>>;
 };
 function invalid(message: string): MolqError {
@@ -17,8 +18,8 @@ function invalid(message: string): MolqError {
 }
 /** Bind or select a destination; registration is explicit and never resent. */
 export async function bindDestination(mq: Molq, name: string, kind?: ClusterDefinition["scheduler"] | "local", options: SubmitOptions = {}): Promise<Destination> {
-    let cluster = mq.cluster(name);
-    const { endpoint, token, timeout, registryId, ...definition } = options;
+    let cluster = mq.cluster(name, options.projectRoot);
+    const { endpoint, token, timeout, registryId, projectRoot, ...definition } = options;
     try {
         const allowed = new Set(["transport", "defaults", "launcher", "pbs_dialect"]);
         if (Object.keys(definition).some(key => !allowed.has(key)))
@@ -47,10 +48,11 @@ export async function bindDestination(mq: Molq, name: string, kind?: ClusterDefi
                 }
             }
             else {
-                cluster = await mq.clusters.register({ name, ...expected });
+                const registered = await mq.clusters.register({ name, ...expected });
+                cluster = mq.cluster(registered.name, projectRoot);
             }
         }
-        const decorate = function <Args extends unknown[], Result>(builder: (...args: Args) => Generator<JobSpec, Result, Job>): (...args: Args) => Promise<Result> {
+        const decorate = function <Args extends unknown[], Result>(builder: (...args: Args) => Generator<JobSpec, Result, Job | JobCollection>): (...args: Args) => Promise<Result> {
             if (typeof builder !== "function" || ["[object AsyncGeneratorFunction]", "[object AsyncFunction]"].includes(Object.prototype.toString.call(builder)))
                 throw new TypeError("Decorate a synchronous generator function");
             return async function (this: unknown, ...args: Args): Promise<Result> {

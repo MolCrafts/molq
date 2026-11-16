@@ -1,7 +1,7 @@
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: test-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ !contains(fromJSON('["refs/heads/dev","refs/heads/master"]'), github.ref) && !startsWith(github.ref, 'refs/tags/') }}
-name: ci
+name: test
 
 'on':
   push:
@@ -21,24 +21,23 @@ jobs:
   context:
     permissions:
       contents: read
-    name: ci
-    uses: MolCrafts/molcrafts-ci/.github/workflows/context.yml@master
+    name: test
+    uses: MolCrafts/molcrafts-ci/.github/workflows/context.yml@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
 
   docs:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Manual
+    name: test / Manual
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v6
       - run: uv sync --extra docs
       - run: uv run --extra docs zensical build --strict
 
@@ -46,22 +45,21 @@ jobs:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Contract, lint and types
+    name: test / Contract, lint and types
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
+
+      - uses: MolCrafts/molcrafts-ci/actions/setup-node@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
-          node-version: "22"
-      - uses: astral-sh/setup-uv@v6
+          working-directory: sdk/typescript
       - run: uv sync --extra dev
-      - run: npm --prefix sdk/typescript ci
       - run: uv run python tools/check_generated.py
       - run: |
           uv run ruff check src tests tools examples
@@ -72,14 +70,14 @@ jobs:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Go serve on ${{ matrix.os }}
+    name: test / Go serve on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: ${{ fromJSON(needs.context.outputs.tier == 'full' && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
       - run: go test ./...
@@ -93,49 +91,47 @@ jobs:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Python ${{ matrix.python }} on ${{ matrix.os }}
+    name: test / Python ${{ matrix.python }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: ${{ fromJSON(needs.context.outputs.tier == 'full' && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
         python: ${{ fromJSON(needs.context.outputs.tier == 'full' && '["3.12", "3.13"]' || '["3.12"]') }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: ${{ matrix.python }}
-      - uses: astral-sh/setup-uv@v6
       - name: Build the current platform serve executable
         run: |
           mkdir -p src/molq/_bin
           go build -o src/molq/_bin/molq ./cmd/molq
       - run: uv sync --extra dev
-      - run: uv run pytest -q --cov=molq --cov-report=xml
-      - uses: codecov/codecov-action@v4
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+      - run: uv run pytest -q --junitxml=junit.xml --cov=molq --cov-branch --cov-report=json:coverage.json
+      - uses: MolCrafts/molcrafts-ci/actions/report@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
+        if: ${{ !cancelled() }}
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage.xml
-          fail_ci_if_error: false
+          title: test (Python ${{ matrix.python }}, ${{ matrix.os }})
+          junit: junit.xml
+          coverage: coverage.json
 
   windows:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Windows remote control plane
+    name: test / Windows remote control plane
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v6
       - name: Compile the Windows serve executable and tests
         run: |
           New-Item -ItemType Directory -Force src/molq/_bin | Out-Null
@@ -148,26 +144,25 @@ jobs:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Native TypeScript peer
+    name: test / Native TypeScript peer
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
+
+      - uses: MolCrafts/molcrafts-ci/actions/setup-node@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
-          node-version: "22"
-      - uses: astral-sh/setup-uv@v6
+          working-directory: sdk/typescript
       - name: Build the current platform serve executable
         run: |
           mkdir -p src/molq/_bin
           go build -o src/molq/_bin/molq ./cmd/molq
       - run: uv sync --extra dev
-      - run: npm --prefix sdk/typescript ci
       - run: npm --prefix sdk/typescript test
         env:
           MOLQ_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
@@ -178,22 +173,23 @@ jobs:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
-    name: ci / Installed artifact
+    name: test / Installed artifact
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: "3.12"
       - run: python -m pip install build twine
-      - run: python -m build
+      - name: Cross-build and verify every release wheel
+        run: python tools/build_wheels.py --sdist
       - run: python -m twine check --strict dist/*
       - run: |
           python -m venv /tmp/molq-wheel
-          /tmp/molq-wheel/bin/pip install dist/*.whl
+          /tmp/molq-wheel/bin/pip install dist/*-manylinux2014_x86_64.*.whl
       - name: Check wheel outside checkout
         working-directory: /tmp
         run: /tmp/molq-wheel/bin/python "${{ github.workspace }}/tools/check_wheel.py"
@@ -204,12 +200,23 @@ jobs:
           /tmp/molq-wheel/bin/molq --help
 
   workflow-policy:
-    name: ci / workflows
+    name: test / workflows
     needs: context
     if: needs.context.outputs.skip-pr != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-    - uses: actions/checkout@v7
-    - uses: MolCrafts/molcrafts-ci/actions/check-workflows@master
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+    - uses: MolCrafts/molcrafts-ci/actions/check-workflows@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
+
+  result:
+    name: test / result
+    needs: [context, docs, lint, go, test, windows, typescript, package, workflow-policy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job succeeded or was skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: echo "$RESULTS" | jq -e 'all(.[]; . == "success" or . == "skipped")'

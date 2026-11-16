@@ -5,13 +5,10 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {submit, JobSpec, Job, Molq, MolqError, bindDestination} from '@molcrafts/molq';
 
-// Job directories live under the target home; keep them out of the real one.
-process.env.HOME = await mkdtemp(join(tmpdir(), 'molq-ts-home-'));
-
 test('Node destination decorator submits yielded JobSpecs and preserves return', async () => {
   const temp = await mkdtemp(join(tmpdir(), 'molq-ts-decorator-'));
   const python = process.env.MOLQ_TEST_PYTHON || resolve('../../.venv/bin/python');
-  const options = {registry: join(temp, 'registry.db'), command: [python, '-m', 'molq', 'serve', '--stdio']};
+  const options = {registry: join(temp, 'registry.db'), projectRoot: temp, command: [python, '-m', 'molq', 'serve', '--stdio']};
   let local;
   try {
     local = await submit('dev', 'local', options);
@@ -41,7 +38,7 @@ test('Decoration is lazy, preserves this and submits each yield once', async () 
   const calls = [];
   const mq = new Molq({call: async (method, params) => { calls.push({method, params}); return {ref: {native_id: String(calls.length)}}; }, close: async () => {}});
   mq.rpc = async (method, params) => { calls.push({method, params}); return {ref: {native_id: String(calls.length)}}; };
-  const local = await bindDestination(mq, 'dev');
+  const local = await bindDestination(mq, 'dev', undefined, {projectRoot: '/project'});
   const object = {name: 'receiver', hello: local(function* () { const job = yield JobSpec.argv(['echo', this.name]); return job; })};
   assert.equal(calls.length, 0);
   await object.hello();
@@ -57,7 +54,7 @@ test('Unknown submission outcome is preserved even if generator cleanup fails', 
   const failure = new MolqError({kind: 'OUTCOME_UNKNOWN', message: 'disconnected', outcome: 'unknown', context: {}});
   const mq = new Molq({call: async () => {}, close: async () => {}});
   mq.rpc = async () => { calls++; throw failure; };
-  const local = await bindDestination(mq, 'dev');
+  const local = await bindDestination(mq, 'dev', undefined, {projectRoot: '/project'});
   const hello = local(function* () {
     try { yield JobSpec.argv(['echo', 'first']); yield JobSpec.argv(['echo', 'never']); }
     finally { closed++; throw new Error('cleanup failed'); }
@@ -84,14 +81,14 @@ test('Destination binding does not resend uncertain registration or silently sel
 
 test('Raw argv yields are rejected before dispatch', async () => {
   const mq = new Molq({call: async () => { assert.fail('dispatched'); }, close: async () => {}});
-  const local = await bindDestination(mq, 'dev');
+  const local = await bindDestination(mq, 'dev', undefined, {projectRoot: '/project'});
   await assert.rejects(local(function* () { yield ['echo', 'raw']; })(), /JobSpec/);
 });
 
 
 test('Async generators are rejected at decoration before dispatch', async () => {
   const mq = new Molq({call: async () => { assert.fail('dispatched'); }, close: async () => {}});
-  const local = await bindDestination(mq, 'dev');
+  const local = await bindDestination(mq, 'dev', undefined, {projectRoot: '/project'});
   assert.throws(() => local(async function* () { yield JobSpec.argv(['echo', 'hello']); }), /synchronous/);
 });
 

@@ -64,6 +64,8 @@ class JobRef(TypedDict):
     cluster_id: str
     native_id: str
     incarnation: str
+    project_root: NotRequired[str]
+    run_id: NotRequired[str]
 
 
 class Dependency(TypedDict):
@@ -71,6 +73,13 @@ class Dependency(TypedDict):
 
     ref: JobRef
     condition: Literal["after", "after_success", "after_failure", "after_started"]
+
+
+class JobArray(TypedDict):
+    """Canonical wire shape."""
+
+    indices: list[int]
+    max_concurrent: NotRequired[int]
 
 
 class Scheduling(TypedDict):
@@ -84,6 +93,8 @@ class Scheduling(TypedDict):
     reservation: NotRequired[str]
     priority: NotRequired[int]
     exclusive: NotRequired[bool]
+    array: NotRequired[JobArray]
+    requeue: NotRequired[bool]
     dependencies: NotRequired[list[Dependency]]
 
 
@@ -153,7 +164,7 @@ class Defaults(TypedDict):
     """Canonical wire shape."""
 
     resources: NotRequired[Resources]
-    scheduling: NotRequired[Scheduling]
+    scheduling: NotRequired[SchedulingDefaults]
     env: NotRequired[dict[str, str]]
     cwd: NotRequired[str]
 
@@ -183,6 +194,21 @@ class ClusterDefinition(TypedDict):
     defaults: NotRequired[Defaults]
     launcher: NotRequired[Literal["srun", "mpirun", "mpiexec"]]
     pbs_dialect: NotRequired[Literal["openpbs"]]
+
+
+class SchedulingDefaults(TypedDict):
+    """Canonical wire shape."""
+
+    name: NotRequired[str]
+    comment: NotRequired[str]
+    partition: NotRequired[str]
+    account: NotRequired[str]
+    qos: NotRequired[str]
+    reservation: NotRequired[str]
+    priority: NotRequired[int]
+    exclusive: NotRequired[bool]
+    requeue: NotRequired[bool]
+    dependencies: NotRequired[list[Dependency]]
 
 
 class ErrorData(TypedDict):
@@ -220,6 +246,19 @@ class JobSnapshot(TypedDict):
     freshness: Freshness
     source: Literal["queue", "accounting", "shell_receipt", "absent", "unavailable"]
     raw_state: str
+    native_diagnostic: NotRequired[dict[str, Any]]
+    failure_reason: NotRequired[
+        Literal[
+            "out_of_memory",
+            "node_failure",
+            "preempted",
+            "timeout",
+            "cancelled",
+            "boot_failure",
+            "deadline",
+            "failed",
+        ]
+    ]
     exit_code: int | None
     name: NotRequired[str | None]
     comment: NotRequired[str | None]
@@ -340,6 +379,8 @@ class JobsPreviewParams(TypedDict):
 
     cluster: str
     spec: JobSpec
+    project_root: str
+    project_scope: NotRequired[str]
 
 
 class JobsSubmitParams(TypedDict):
@@ -348,6 +389,8 @@ class JobsSubmitParams(TypedDict):
     cluster: str
     spec: JobSpec
     request_key: NotRequired[str]
+    project_root: str
+    project_scope: NotRequired[str]
 
 
 class JobsGetParams(TypedDict):
@@ -374,12 +417,16 @@ class JobsObserveParams(TypedDict):
     max_age: NotRequired[float]
     cluster: NotRequired[str]
     cursor: NotRequired[str]
+    project_root: NotRequired[str]
+    project_scope: NotRequired[str]
 
 
 class JobsListParams(TypedDict):
     """Canonical wire shape."""
 
     cluster: str
+    project_root: NotRequired[str]
+    project_scope: NotRequired[str]
     states: NotRequired[
         list[
             Literal[
@@ -424,16 +471,36 @@ class JobsCancelParams(TypedDict):
     request_key: NotRequired[str]
 
 
+class JobsRequeueParams(TypedDict):
+    """Canonical wire shape."""
+
+    ref: JobRef
+
+
 class JobsCancel_ManyParams(TypedDict):
     """Canonical wire shape."""
 
     refs: list[JobRef]
 
 
-class JobsPurgeParams(TypedDict):
+class MaintenanceInspectParams(TypedDict):
     """Canonical wire shape."""
 
-    cluster: NotRequired[str]
+    cluster: str
+    after: NotRequired[str]
+
+
+class MaintenancePruneParams(TypedDict):
+    """Canonical wire shape."""
+
+    cluster: str
+    entries: list[str]
+
+
+class MaintenancePrune_SubmissionsParams(TypedDict):
+    """Canonical wire shape."""
+
+    pass
 
 
 class LogsReadParams(TypedDict):

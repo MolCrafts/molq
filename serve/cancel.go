@@ -15,7 +15,7 @@ func (s *Service) cancel(ctx context.Context, method string, params map[string]a
 		refs = append(refs, mapValue(params["ref"]))
 	}
 	if method == "jobs.cancel" {
-		outcome, err := s.cancelOne(ctx, refs[0])
+		outcome, err := s.mutateJob(ctx, refs[0], false)
 		if err != nil {
 			return nil, err
 		}
@@ -36,7 +36,7 @@ func (s *Service) cancel(ctx context.Context, method string, params map[string]a
 	runBatches(len(ids), func(i int) {
 		for _, index := range groups[ids[i]] {
 			ref := refs[index]
-			outcome, err := s.cancelOne(ctx, ref)
+			outcome, err := s.mutateJob(ctx, ref, false)
 			if err != nil {
 				results[index] = map[string]any{"ref": ref, "error": asData(err)}
 				continue
@@ -54,7 +54,7 @@ func (s *Service) cancel(ctx context.Context, method string, params map[string]a
 	return map[string]any{"results": results, "partial_failure": partial}, nil
 }
 
-func (s *Service) cancelOne(ctx context.Context, ref map[string]any) (map[string]any, error) {
+func (s *Service) mutateJob(ctx context.Context, ref map[string]any, requeue bool) (map[string]any, error) {
 	if err := s.checkRef(ref); err != nil {
 		return nil, err
 	}
@@ -71,6 +71,12 @@ func (s *Service) cancelOne(ctx context.Context, ref map[string]any) (map[string
 	job, err := s.identity(ctx, item, ref)
 	if err != nil {
 		return nil, err
+	}
+	if requeue {
+		if err := item.Requeue(ctx, job); err != nil {
+			return nil, err
+		}
+		return map[string]any{"outcome": "accepted", "ref": ref}, nil
 	}
 	return item.Cancel(ctx, job)
 }

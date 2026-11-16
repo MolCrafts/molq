@@ -80,7 +80,7 @@ request fragments; retrieve one and apply its fields explicitly.
 
 ```json
 {
-  "settings": {"cache_max_entries": 4096, "cache_max_age": 5, "job_retention_days": 30},
+  "settings": {"cache_max_entries": 4096, "cache_max_age": 5},
   "presets": {"small": {"resources": {"tasks": 1, "cpus_per_task": 2}}}
 }
 ```
@@ -98,32 +98,31 @@ molq rpc config.reload
 edits leave the previous settings active. `default_cluster` is a saved preference;
 RPC operations still require an explicit scope.
 
-## Job directory retention
+## Layout upgrade and legacy maintenance
 
-`job_retention_days` (default `30`) is how long job directories are kept. A job
-directory whose newest modification time, taken over the directory and its
-immediate entries, is older than that many days is deleted with its contents. It
-is not archived and cannot be recovered. This covers every registered cluster's
-`~/.molcrafts/molq/jobs/` and the serve host's `collected/` archive next to the
-registry, including archives of removed clusters. Only directories named by a
-32-digit job identity are touched; anything else under those roots stays.
-`0` disables purging. Values are whole days from 0 to 36500.
+Stop every old serve and stdio process using the registry. Back up
+`registry.db` and `submissions/<registry-id>/` and remove
+`job_retention_days` from the configuration. On open, the new runtime imports
+legacy submission evidence into the existing SQLite database. Imported keys
+remain reserved and return `CONFLICT` on new submissions. Run
+`maintenance.prune_submissions` to remove only files verified against the
+SQLite copy. The result reports removed and retained filenames.
+
+Old archives are preserved during upgrade. Inspect a cluster's archive, then
+choose specific verified duplicates to delete:
 
 ```sh
-molq rpc config.set --params '{"key":"job_retention_days","value":30}'
-molq job purge
+molq rpc maintenance.inspect --params '{"cluster":"hpc"}'
+molq rpc maintenance.prune --params '{"cluster":"hpc","entries":["0123456789abcdef0123456789abcdef"]}'
+molq rpc maintenance.prune_submissions
 ```
 
-A listening `molq serve` purges at start and every 24 hours, and reads the
-setting on each pass. A temporary stdio service does not purge on its own; run
-`molq job purge [CLUSTER]` (the `jobs.purge` method). Each cluster target and each
-archive gets one result listing the removed directories; a cluster that cannot
-be reached reports an error there, sets `partial_failure` (CLI exit 8), and does
-not stop the others. The listening service writes those failures to stderr.
-A job that runs longer than the window without changing its job directory
-(no stdout, stderr or script change) loses that directory, including Shell
-receipts. Once a directory is gone, its logs and Shell job state can no longer
-be read.
+Inspection checks the local manifest and returns an optional `after` value
+for the next page. For a removed cluster, inspect by its original cluster ID. Pruning checks the manifest again and verifies the remote copy. It deletes only
+serve-host archive files whose complete matching copy is still present on the
+target. Interrupted copies, mixed archives, and the only known copies of
+logs or Shell receipts stay available for manual export. The new runtime does
+not look up old Shell runs through these archives.
 
 SSH connection options belong in OpenSSH configuration. molq does not read
 `MOLQ_*` environment variables. See [watch configuration](plugins.md#defaults)

@@ -127,7 +127,7 @@ func TestListKeepsAuthenticationFailure(t *testing.T) {
 		"diagnostic": "Permission denied (keyboard-interactive).",
 		"dispatched": false,
 	})
-	_, err := NewSlurm(fake, map[string]any{}).List(context.Background())
+	_, err := NewSlurm(fake, map[string]any{}).List(context.Background(), "")
 	item, _ := err.(*protocol.Error)
 	if item == nil || item.Kind != "AUTH_REQUIRED" {
 		t.Fatalf("err=%#v", err)
@@ -138,7 +138,7 @@ func TestListKeepsAuthenticationFailure(t *testing.T) {
 }
 
 func TestQueryErrorIsNotEmpty(t *testing.T) {
-	_, err := NewPBS(script(transport.Result{ReturnCode: 1, Stderr: []byte("unavailable")}), map[string]any{}).QueryMany(context.Background(), []string{"123"})
+	_, err := NewPBS(script(transport.Result{ReturnCode: 1, Stderr: []byte("unavailable")}), map[string]any{}).QueryMany(context.Background(), []string{"123"}, "")
 	item, _ := err.(*protocol.Error)
 	if item == nil || item.Kind != "SCHEDULER_UNAVAILABLE" {
 		t.Fatalf("err=%v", err)
@@ -199,7 +199,7 @@ func TestSlurmQueueMissUsesAccounting(t *testing.T) {
 		transport.Result{ReturnCode: 1, Stderr: []byte("Invalid job id specified")},
 		`{"jobs":[{"job_id":"42","state":{"current":"COMPLETED"},"time":{"submission":1710000000,"end":1710000010},"exit_code":{"return_code":0,"signal":{"id":0}},"name":"name"}]}`,
 	)
-	jobs, err := NewSlurm(fake, map[string]any{}).QueryMany(context.Background(), []string{"42"})
+	jobs, err := NewSlurm(fake, map[string]any{}).QueryMany(context.Background(), []string{"42"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,10 +219,10 @@ func TestSlurmSubmitStreamsScriptAndSetsJobPaths(t *testing.T) {
 	if job.NativeID != "123" || len(fake.files) != 0 || len(fake.calls) != 3 {
 		t.Fatalf("job=%+v files=%v calls=%v", job, fake.files, fake.calls)
 	}
-	if fake.calls[0][0] != "sh" || fake.calls[0][len(fake.calls[0])-1] != directory {
+	if fake.calls[0][0] != "sh" || fake.calls[0][4] != directory {
 		t.Fatalf("directory creation = %v", fake.calls[0])
 	}
-	want := []string{"sbatch", "--parsable", "--chdir=" + directory, "--output=/target/a b%%j/job/stdout", "--error=/target/a b%%j/job/stderr", "--comment", "test comment"}
+	want := []string{"env", "-u", "SBATCH_ARRAY_INX", "sbatch", "--parsable", "--chdir=" + directory, "--output=/target/a b%%j/job/stdout", "--error=/target/a b%%j/job/stderr", "--job-name=job.sh", "--no-requeue", "--comment", "test comment"}
 	if !slices.Equal(fake.calls[1], want) {
 		t.Fatalf("submission argv = %v", fake.calls[1])
 	}
@@ -241,18 +241,18 @@ func TestSlurmDirectoryFailureDoesNotSubmit(t *testing.T) {
 	}
 }
 
-func TestSlurmCompletingWithEndUsesExitCode(t *testing.T) {
+func TestSlurmCompletingWithEndStaysOpen(t *testing.T) {
 	done := `{"jobs":[{"job_id":"3711469","state":{"current":"COMPLETING"},"time":{"submission":1710000000,"end":1710000010},"exit_code":{"return_code":0,"signal":{"id":0}},"name":"atv-cuda-nddo"}]}`
 	jobs, err := parseSlurmJobs(done, "accounting")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if jobs[0].State != "succeeded" || jobs[0].RawState != "COMPLETING" || jobs[0].EndedAt == nil || jobs[0].ExitCode == nil || *jobs[0].ExitCode != 0 {
+	if jobs[0].State != "running" || jobs[0].RawState != "COMPLETING" || jobs[0].EndedAt != nil || jobs[0].ExitCode != nil {
 		t.Fatalf("%+v", jobs[0])
 	}
-	failed := `{"jobs":[{"job_id":"3711469","state":{"current":"COMPLETING"},"time":{"submission":1710000000,"end":1710000010},"exit_code":{"return_code":8},"name":"atv-cuda-nddo"}]}`
+	failed := `{"jobs":[{"job_id":"3711469","state":{"current":["FAILED","COMPLETING"]},"time":{"submission":1710000000,"end":1710000010},"exit_code":{"return_code":8},"name":"atv-cuda-nddo"}]}`
 	jobs, err = parseSlurmJobs(failed, "accounting")
-	if err != nil || jobs[0].State != "failed" || jobs[0].ExitCode == nil || *jobs[0].ExitCode != 8 {
+	if err != nil || Terminal(jobs[0].State) || jobs[0].ExitCode != nil {
 		t.Fatalf("err=%v job=%+v", err, jobs[0])
 	}
 }
@@ -263,7 +263,7 @@ func TestSlurmCompletingWithoutEndStaysOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if jobs[0].State != "unknown" || jobs[0].EndedAt != nil || Terminal(jobs[0].State) {
+	if jobs[0].State != "running" || jobs[0].EndedAt != nil || Terminal(jobs[0].State) {
 		t.Fatalf("%+v", jobs[0])
 	}
 }
@@ -292,7 +292,7 @@ func TestPBSRenderAndFinishedTruth(t *testing.T) {
 		}
 	}
 	fake := script(`{"Jobs":{"123.host":{"job_state":"F","ctime":123456,"Exit_status":0,"Output_Path":"host:/target/job/stdout"}}}`)
-	jobs, err := NewPBS(fake, map[string]any{"pbs_dialect": "openpbs"}).QueryMany(context.Background(), []string{"123.host"})
+	jobs, err := NewPBS(fake, map[string]any{"pbs_dialect": "openpbs"}).QueryMany(context.Background(), []string{"123.host"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestLSFDirectivesAndState(t *testing.T) {
 	if err != nil || !strings.Contains(scriptText, "-W 0:02") || !strings.Contains(scriptText, "-w 'exit(10)'") {
 		t.Fatalf("err=%v script=%s", err, scriptText)
 	}
-	jobs, err := NewLSF(script(`{"RECORDS":[{"JOBID":"10","STAT":"DONE","SUBMIT_TIME":"2026-10-07","EXEC_CWD":"/target/job","EXIT_CODE":"0"}]}`), map[string]any{}).QueryMany(context.Background(), []string{"10"})
+	jobs, err := NewLSF(script(`{"RECORDS":[{"JOBID":"10","STAT":"DONE","SUBMIT_TIME":"2026-10-07","EXEC_CWD":"/target/job","EXIT_CODE":"0"}]}`), map[string]any{}).QueryMany(context.Background(), []string{"10"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +351,7 @@ func TestPostAcceptanceQueryFailureRemainsUnknown(t *testing.T) {
 
 func TestLSFUsesNativeOutputPaths(t *testing.T) {
 	fake := script(`{"RECORDS":[{"JOBID":"42","STAT":"PEND","SUBMIT_TIME":"Oct 7 10:00","EXEC_CWD":"-","OUTPUT_FILE":"/target/allocation/stdout","ERROR_FILE":"/target/allocation/stderr"}]}`)
-	jobs, err := NewLSF(fake, map[string]any{}).QueryMany(context.Background(), []string{"42"})
+	jobs, err := NewLSF(fake, map[string]any{}).QueryMany(context.Background(), []string{"42"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,14 +18,14 @@ jobs:
     permissions:
       contents: read
     name: release
-    uses: MolCrafts/molcrafts-ci/.github/workflows/context.yml@master
+    uses: MolCrafts/molcrafts-ci/.github/workflows/context.yml@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
 
   verify:
     if: needs.context.outputs.skip-pr != 'true'
     needs:
     - context
     name: release / verify
-    uses: ./.github/workflows/ci.yml
+    uses: ./.github/workflows/test.yml
     secrets: inherit
 
   version:
@@ -35,8 +35,8 @@ jobs:
     name: release / version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
         with:
           python-version: "3.12"
       - name: Tag matches version
@@ -48,12 +48,37 @@ jobs:
           assert os.environ["GITHUB_REF_NAME"] == "v" + version
           PYCODE
 
+  build:
+    if: needs.context.outputs.skip-pr != 'true'
+    needs:
+    - context
+    name: release / Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: MolCrafts/molcrafts-ci/actions/setup-python@3cc26f4ff1b8b6d09365d677c4a05cc8cbb70a76
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build twine
+      - name: Cross-build and verify every platform wheel and the sdist
+        run: python tools/build_wheels.py --sdist
+      - run: python -m twine check --strict dist/*
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+
   publish-pypi:
     name: release / Publish to PyPI
     needs:
     - context
     - verify
     - version
+    - build
     if: needs.context.outputs.publish == 'true'
     runs-on: ubuntu-latest
     environment:
@@ -61,19 +86,10 @@ jobs:
       url: https://pypi.org/p/molcrafts-molq
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          python-version: "3.12"
-
-      - name: Build artifacts
-        run: |
-          python -m pip install --upgrade build twine
-          python -m build
-          python -m twine check --strict dist/*
+          name: distributions
+          path: dist/
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3

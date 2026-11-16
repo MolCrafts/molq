@@ -5,7 +5,7 @@ Decorate a function with a registered destination:
 ```python
 from molq import JobSpec, submit
 
-local = submit("local")  # Bound in the quickstart.
+local = submit("local", project_root="/absolute/project")
 
 
 @local
@@ -50,7 +50,7 @@ spec = JobSpec(
         units=(ExecutionUnit.argv("main", ["python", "simulate.py"]),),
     ),
 )
-hpc = submit("hpc")
+hpc = submit("hpc", project_root="/shared/project")
 print(json.dumps(hpc.preview(spec), ensure_ascii=False))
 
 
@@ -143,16 +143,47 @@ dependent = JobSpec(
 Conditions are `after`, `after_success`, `after_failure`, and `after_started`.
 The scheduler must support the requested condition exactly; see [mappings](schedulers.md#scheduler-mappings).
 
-Save `job.ref` after submission. If a mutation returns `OUTCOME_UNKNOWN`, inspect
-native state before submitting again. A `request_key` deduplicates only within
-the same service for a bounded interval; it does not survive a restart.
+Save `job.ref` after submission, or `collection.refs` for an array. Provide a
+`request_key` to make one submission recoverable across serve restarts. Repeat
+the same request and key to retrieve its receipt or reconcile with native
+evidence. An unresolved submission returns `OUTCOME_UNKNOWN` and repeating
+the key never resends it. Different parameters with the same key conflict.
+Cancel keys remain scoped to one serve instance.
 
-## Job directory retention
+### Slurm job arrays
 
-Each submission's job directory (`~/.molcrafts/molq/jobs/<id>/` on the target,
-or its collected copy under `collected/` on the serve host) is deleted outright
-once nothing in it has changed for `job_retention_days`, 30 days by default.
-Its script, logs and receipts go with it, and so do files the job wrote into its
-default working directory; set an explicit execution `cwd` for results you want
-to keep. See [retention](configuration.md#job-directory-retention) to change or
-disable the window and to purge on demand.
+Set `Scheduling(array=JobArray((0, 1, 4), max_concurrent=2))` on a job spec.
+Slurm receives one submission and runs each index in its own working directory.
+The payload can read `SLURM_ARRAY_TASK_ID`. Python and TypeScript return a
+`JobCollection`; CLI and RPC return `array_id`, `refs`, and `snapshots`.
+Each element reference can be used independently for status, logs, dependencies,
+and cancellation. The supported request size is 1–64 elements. Slurm decides
+which indices and concurrency limits the site accepts.
+
+For a Slurm plan with parallel branches, request one node, explicit tasks and
+memory, and CPU-only resources. Each step receives its own CPU allocation
+and a share of the requested memory proportional to its CPU count. Parallel
+MPI uses the cluster's explicit `srun` launcher.
+
+## Native Slurm requeue
+
+Set `Scheduling(requeue=True)` to opt into the site's native requeue policy.
+Use `job.requeue()` or `molq job requeue --ref @ref.json` for an explicit
+request on an incomplete Slurm job or individual array element. The native
+scheduler decides whether to accept it. Acceptance does not confirm that the
+job has restarted. Slurm may reset its submission time; use the new JobRef
+from `job list` or native history for the restarted incarnation.
+To rerun a finished array element, submit a new array with just the intended
+indices and a fresh request key.
+
+Slurm snapshots retain the raw state and native diagnostic fields. An allocation
+reported as `FAILED` can have an `out_of_memory` reason when native accounting
+shows an OOM step. The allocation's original state and the step evidence are
+both preserved.
+
+## Project logs and outputs
+
+Pass the existing target project directory as `project_root` when submitting.
+Default logs and Shell receipts follow that project. Use an
+[artifact manifest](api.md#select-named-outputs-with-a-manifest) to download
+named user outputs. See [files and logs](remote-files.md) for log access.

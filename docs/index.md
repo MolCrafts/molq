@@ -35,10 +35,11 @@ Choose a registered destination, decorate a function, and call it.
 
 ```python
 import json
+from pathlib import Path
 
 from molq import JobSpec, submit
 
-local = submit("local", "local")
+local = submit("local", "local", project_root=Path.cwd())
 
 
 @local
@@ -72,7 +73,7 @@ Choose the allocation and account. Your SSH configuration handles the connection
 ```python
 from molq import JobSpec, Resources, Scheduling, submit
 
-hpc = submit("hpc")
+hpc = submit("hpc", project_root="/shared/project")
 
 
 @hpc

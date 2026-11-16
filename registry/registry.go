@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = "2"
+const schemaVersion = "3"
 
 const incompatibleRegistry = "Registry file is not a molq registry"
 
@@ -34,7 +34,7 @@ func DefaultPath() string {
 	return filepath.Join(home, ".molcrafts", "molq", "registry.db")
 }
 
-// Open creates or opens a version-2 registry of schema_meta and clusters.
+// Open creates or upgrades the serve-owned registry.
 func Open(path string) (*Registry, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, protocol.Fail("STATE_BUSY", "Cannot open registry configuration", nil)
@@ -80,7 +80,8 @@ func (r *Registry) initialize() error {
 		return protocol.Fail("STATE_BUSY", "Cannot open registry configuration", nil)
 	}
 	_ = rows.Close()
-	owned := map[string]bool{"schema_meta": true, "clusters": true}
+	owned := map[string]bool{"schema_meta": true, "clusters": true, "submission_operations": true}
+	var upgrade bool
 	extra := false
 	for name := range tables {
 		if !owned[name] {
@@ -106,7 +107,9 @@ func (r *Registry) initialize() error {
 		}
 		err = rows.Err()
 		_ = rows.Close()
-		if err != nil || meta["schema_version"] != schemaVersion || meta["registry_id"] == "" {
+		upgrade = meta["schema_version"] == "2" && !tables["submission_operations"]
+		current := meta["schema_version"] == schemaVersion && tables["submission_operations"]
+		if err != nil || (!upgrade && !current) || meta["registry_id"] == "" {
 			return protocol.Fail("STATE_SCHEMA_INCOMPATIBLE", incompatibleRegistry, nil)
 		}
 		rows, err = r.db.Query("SELECT id, name, definition, revision FROM clusters LIMIT 0")
@@ -122,8 +125,18 @@ func (r *Registry) initialize() error {
 	if _, err := r.db.Exec("PRAGMA foreign_keys=ON"); err != nil {
 		return protocol.Fail("STATE_BUSY", "Cannot open registry configuration", nil)
 	}
+	if _, err := r.db.Exec("PRAGMA synchronous=FULL"); err != nil {
+		return protocol.Fail("STATE_BUSY", "Cannot configure durable submission receipts", nil)
+	}
+	if upgrade {
+		return r.migrateSubmissions()
+	}
 	if len(tables) > 0 {
-		return nil
+		rows, err := r.db.Query("SELECT key_digest, record, final, legacy FROM submission_operations LIMIT 0")
+		if err != nil {
+			return protocol.Fail("STATE_SCHEMA_INCOMPATIBLE", incompatibleRegistry, nil)
+		}
+		return rows.Close()
 	}
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -135,6 +148,9 @@ func (r *Registry) initialize() error {
 	}
 	if _, err := tx.Exec(`CREATE TABLE clusters(id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, definition TEXT NOT NULL, revision INTEGER NOT NULL)`); err != nil {
 		return protocol.Fail("STATE_BUSY", "Cannot open registry configuration", nil)
+	}
+	if _, err := tx.Exec(submissionTable); err != nil {
+		return protocol.Fail("STATE_BUSY", "Cannot initialize submission storage", nil)
 	}
 	id, err := newUUID()
 	if err != nil {

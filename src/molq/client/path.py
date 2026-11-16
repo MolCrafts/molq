@@ -500,7 +500,11 @@ class Path(PurePosixPath):
         return self.rename(target)
 
     def transfer(
-        self, destination: str | os.PathLike, *options: str, timeout: int = 90
+        self,
+        destination: str | os.PathLike,
+        *options: str,
+        timeout: int = 90,
+        directory: bool | None = None,
     ) -> dict:
         """Make ``destination`` a copy of this path with one rsync run.
 
@@ -522,7 +526,8 @@ class Path(PurePosixPath):
                 or rsync fails. An unknown outcome may mean files were copied.
         """
         target = destination if isinstance(destination, Path) else Path(destination)
-        slash = "/" if self.is_dir() else ""
+        is_directory = self.is_dir() if directory is None else directory
+        slash = "/" if is_directory else ""
         client = self._molq or target._molq or _default_molq()
         return client.rpc(
             "files.transfer",

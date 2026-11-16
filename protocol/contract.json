@@ -179,6 +179,14 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 4096
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
         }
       },
       "required": [
@@ -207,6 +215,31 @@
       "required": [
         "ref",
         "condition"
+      ],
+      "additionalProperties": false
+    },
+    "JobArray": {
+      "type": "object",
+      "properties": {
+        "indices": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "max_concurrent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        }
+      },
+      "required": [
+        "indices"
       ],
       "additionalProperties": false
     },
@@ -243,6 +276,12 @@
           "maximum": 1000000
         },
         "exclusive": {
+          "type": "boolean"
+        },
+        "array": {
+          "$ref": "#/$defs/JobArray"
+        },
+        "requeue": {
           "type": "boolean"
         },
         "dependencies": {
@@ -449,7 +488,7 @@
           "$ref": "#/$defs/Resources"
         },
         "scheduling": {
-          "$ref": "#/$defs/Scheduling"
+          "$ref": "#/$defs/SchedulingDefaults"
         },
         "env": {
           "type": "object",
@@ -540,6 +579,55 @@
         "name",
         "scheduler"
       ],
+      "additionalProperties": false
+    },
+    "SchedulingDefaults": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "comment": {
+          "type": "string",
+          "maxLength": 4094
+        },
+        "partition": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "account": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "qos": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "reservation": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "exclusive": {
+          "type": "boolean"
+        },
+        "requeue": {
+          "type": "boolean"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Dependency"
+          },
+          "maxItems": 256
+        }
+      },
+      "required": [],
       "additionalProperties": false
     },
     "ErrorData": {
@@ -652,6 +740,22 @@
         },
         "raw_state": {
           "type": "string"
+        },
+        "native_diagnostic": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "failure_reason": {
+          "enum": [
+            "out_of_memory",
+            "node_failure",
+            "preempted",
+            "timeout",
+            "cancelled",
+            "boot_failure",
+            "deadline",
+            "failed"
+          ]
         },
         "exit_code": {
           "type": [
@@ -1012,11 +1116,20 @@
         },
         "spec": {
           "$ref": "#/$defs/JobSpec"
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "project_scope": {
+          "type": "string",
+          "maxLength": 4096
         }
       },
       "required": [
         "cluster",
-        "spec"
+        "spec",
+        "project_root"
       ],
       "additionalProperties": false
     },
@@ -1034,11 +1147,20 @@
         "request_key": {
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "project_scope": {
+          "type": "string",
+          "maxLength": 4096
         }
       },
       "required": [
         "cluster",
-        "spec"
+        "spec",
+        "project_root"
       ],
       "additionalProperties": false
     },
@@ -1127,6 +1249,14 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 4096
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "project_scope": {
+          "type": "string",
+          "maxLength": 4096
         }
       },
       "required": [],
@@ -1138,6 +1268,14 @@
         "cluster": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 4096
+        },
+        "project_root": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "project_scope": {
+          "type": "string",
           "maxLength": 4096
         },
         "states": {
@@ -1257,6 +1395,18 @@
       ],
       "additionalProperties": false
     },
+    "jobs.requeue": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/JobRef"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false
+    },
     "jobs.cancel_many": {
       "type": "object",
       "properties": {
@@ -1274,15 +1424,52 @@
       ],
       "additionalProperties": false
     },
-    "jobs.purge": {
+    "maintenance.inspect": {
       "type": "object",
       "properties": {
         "cluster": {
           "type": "string",
           "minLength": 1,
           "maxLength": 4096
+        },
+        "after": {
+          "type": "string",
+          "maxLength": 4096
         }
       },
+      "required": [
+        "cluster"
+      ],
+      "additionalProperties": false
+    },
+    "maintenance.prune": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+          },
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "cluster",
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    "maintenance.prune_submissions": {
+      "type": "object",
+      "properties": {},
       "required": [],
       "additionalProperties": false
     },

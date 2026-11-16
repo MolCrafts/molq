@@ -24,10 +24,7 @@ type queryFlight struct {
 func queryFlightKey(cluster map[string]any, refs []map[string]any) string {
 	identities := make([]string, 0, len(refs))
 	for _, ref := range refs {
-		// Encode fields individually to avoid delimiter collisions in native IDs.
-		identity, _ := json.Marshal([]string{stringField(ref["registry_id"]),
-			stringField(ref["cluster_id"]), stringField(ref["native_id"]), stringField(ref["incarnation"])})
-		identities = append(identities, string(identity))
+		identities = append(identities, RefKey(ref))
 	}
 	sort.Strings(identities)
 	identities = compactIdentities(identities)
@@ -70,7 +67,8 @@ func (s *Service) sharedQuery(ctx context.Context, cluster map[string]any, item 
 		s.queryFlights[key] = flight
 		s.queryActive++
 		ids := nativeIDs(refs)
-		go s.executeQuery(sharedCtx, key, id, item, ids, flight)
+		project := stringField(refs[0]["project_root"])
+		go s.executeQuery(sharedCtx, key, id, item, ids, project, flight)
 	}
 	flight.waiters++
 	s.mu.Unlock()
@@ -86,11 +84,11 @@ func (s *Service) sharedQuery(ctx context.Context, cluster map[string]any, item 
 	}
 }
 
-func (s *Service) executeQuery(ctx context.Context, key, id string, item scheduler.Scheduler, ids []string, flight *queryFlight) {
+func (s *Service) executeQuery(ctx context.Context, key, id string, item scheduler.Scheduler, ids []string, project string, flight *queryFlight) {
 	defer flight.cancel()
 	release, err := s.acquire(ctx, id)
 	if err == nil {
-		flight.jobs, err = item.QueryMany(ctx, ids)
+		flight.jobs, err = item.QueryMany(ctx, ids, project)
 		release()
 	}
 	flight.err = err
