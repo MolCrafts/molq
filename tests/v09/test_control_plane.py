@@ -59,7 +59,10 @@ def test_stdio_subscription_pushes_registry_reset(tmp_path):
             stdout=asyncio.subprocess.PIPE,
         )
 
-        async def call(identity, method, params):
+        async def read():
+            return json.loads(await asyncio.wait_for(process.stdout.readline(), 5))
+
+        async def send(identity, method, params):
             process.stdin.write(
                 (
                     json.dumps(
@@ -74,23 +77,25 @@ def test_stdio_subscription_pushes_registry_reset(tmp_path):
                 ).encode()
             )
             await process.stdin.drain()
-            return json.loads(await asyncio.wait_for(process.stdout.readline(), 5))
 
         try:
-            assert (await call(1, "events.subscribe", {}))["result"]["resync"]
-            assert (
-                await call(
-                    2,
-                    "clusters.register",
-                    {
-                        "name": "remote",
-                        "scheduler": "slurm",
-                        "transport": {"kind": "ssh", "alias": "hpc"},
-                    },
-                )
-            )["result"]["id"]
-            pushed = json.loads(await asyncio.wait_for(process.stdout.readline(), 5))
-            assert pushed["method"] == "events" and pushed["params"]["resync"]
+            await send(1, "events.subscribe", {})
+            assert (await read())["result"]["resync"]
+            await send(
+                2,
+                "clusters.register",
+                {
+                    "name": "remote",
+                    "scheduler": "slurm",
+                    "transport": {"kind": "ssh", "alias": "hpc"},
+                },
+            )
+            # The push and the response share stdout; either may arrive first.
+            frames = [await read(), await read()]
+            (response,) = [frame for frame in frames if frame.get("id") == 2]
+            (pushed,) = [frame for frame in frames if frame.get("method") == "events"]
+            assert response["result"]["id"]
+            assert pushed["params"]["resync"]
         finally:
             process.stdin.close()
             await asyncio.wait_for(process.wait(), 10)
